@@ -50,6 +50,7 @@ router.post('/register', async (req, res) => {
       name: user.name,
       email: user.email,
       mobile: user.mobile,
+      picture: user.picture,
       role: user.role,
       status: user.status,
       org: user.org,
@@ -90,6 +91,7 @@ router.post('/login', async (req, res) => {
       name: user.name,
       email: user.email,
       mobile: user.mobile,
+      picture: user.picture,
       role: user.role,
       status: user.status,
       org: user.org,
@@ -167,7 +169,7 @@ router.post('/google', async (req, res) => {
   const { credential, accessToken } = req.body;
 
   try {
-    let email, name;
+    let email, name, picture;
 
     if (credential) {
       const ticket = await client.verifyIdToken({
@@ -177,6 +179,7 @@ router.post('/google', async (req, res) => {
       const payload = ticket.getPayload();
       email = payload.email;
       name = payload.name;
+      picture = payload.picture;
     } else if (accessToken) {
       const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
         headers: { Authorization: `Bearer ${accessToken}` }
@@ -187,6 +190,7 @@ router.post('/google', async (req, res) => {
       const data = await response.json();
       email = data.email;
       name = data.name;
+      picture = data.picture;
     } else {
       return res.status(400).json({ message: 'Missing Google verification token' });
     }
@@ -198,6 +202,7 @@ router.post('/google', async (req, res) => {
         return res.status(403).json({ message: 'Your account is suspended' });
       }
       user.lastLoginAt = Date.now();
+      if (picture) user.picture = picture;
       await user.save();
     } else {
       const salt = await bcrypt.genSalt(10);
@@ -208,6 +213,7 @@ router.post('/google', async (req, res) => {
         email: email.toLowerCase(),
         password: hashedPassword,
         mobile: '', // Forces mobile entry on UI
+        picture: picture || '',
         role: 'user',
         status: 'active',
         org: 'default'
@@ -219,6 +225,7 @@ router.post('/google', async (req, res) => {
       name: user.name,
       email: user.email,
       mobile: user.mobile,
+      picture: user.picture,
       role: user.role,
       status: user.status,
       org: user.org,
