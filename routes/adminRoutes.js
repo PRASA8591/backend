@@ -34,11 +34,24 @@ router.get('/stats', async (req, res) => {
     // Ensure default is counted if not present, or return distinct size
     const totalOrgs = Math.max(uniqueOrgs.length, 1);
 
+    // Advanced breakdowns
+    const freeUsers = await User.countDocuments({ plan: 'free' });
+    const proUsers = await User.countDocuments({ plan: 'pro' });
+    const enterpriseUsers = await User.countDocuments({ plan: 'enterprise' });
+
+    const totalAccounts = await Account.countDocuments({});
+    const totalTransactions = await Transaction.countDocuments({});
+
     res.json({
       totalUsers,
       privilegedUsers,
       suspendedUsers,
-      totalOrgs
+      totalOrgs,
+      freeUsers,
+      proUsers,
+      enterpriseUsers,
+      totalAccounts,
+      totalTransactions
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error retrieving statistics' });
@@ -325,6 +338,35 @@ router.put('/users/:id/plan', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error updating user plan' });
+  }
+});
+
+// @route   POST /api/admin/announcements
+// @desc    Send a global notification announcement to all users
+router.post('/announcements', async (req, res) => {
+  const { title, message, type } = req.body;
+  try {
+    if (!title || !message) {
+      return res.status(400).json({ message: 'Title and message are required' });
+    }
+
+    const User = require('../models/User');
+    const Notification = require('../models/Notification');
+    const users = await User.find({});
+
+    // Create a notification for each user
+    const notifications = users.map(u => ({
+      userId: u._id,
+      title,
+      message,
+      type: type || 'info'
+    }));
+
+    await Notification.insertMany(notifications);
+
+    res.status(201).json({ message: `Announcement broadcasted successfully to ${users.length} users.` });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error broadcasting announcement' });
   }
 });
 

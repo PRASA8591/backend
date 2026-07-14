@@ -69,7 +69,7 @@ const UserSchema = new mongoose.Schema({
   },
   theme: {
     type: String,
-    enum: ['light', 'dark'],
+    enum: ['light', 'dark', 'forest', 'nordic', 'cyberpunk'],
     default: 'light'
   },
   currency: {
