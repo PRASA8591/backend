@@ -40,6 +40,46 @@ const UserSchema = new mongoose.Schema({
     type: Number,
     default: 50000
   },
+  plan: {
+    type: String,
+    enum: ['free', 'pro', 'enterprise'],
+    default: 'free'
+  },
+  planType: {
+    type: String,
+    enum: ['monthly', 'yearly', 'none'],
+    default: 'none'
+  },
+  planStatus: {
+    type: String,
+    enum: ['active', 'expired', 'canceled'],
+    default: 'active'
+  },
+  planStartDate: {
+    type: Date,
+    default: Date.now
+  },
+  planExpiryDate: {
+    type: Date,
+    default: () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // Default 30 days
+  },
+  profilePhoto: {
+    type: String,
+    default: ''
+  },
+  theme: {
+    type: String,
+    enum: ['light', 'dark'],
+    default: 'light'
+  },
+  currency: {
+    type: String,
+    default: 'RS'
+  },
+  notificationsEnabled: {
+    type: Boolean,
+    default: true
+  },
   lastLoginAt: {
     type: Date,
     default: Date.now

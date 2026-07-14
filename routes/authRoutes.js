@@ -42,19 +42,16 @@ router.post('/register', async (req, res) => {
       email: email.toLowerCase(),
       password: hashedPassword,
       mobile: mobile || '',
-      role
+      role,
+      plan: 'free',
+      planType: 'none',
+      planStatus: 'active'
     });
 
+    const userObj = user.toObject();
+    delete userObj.password;
     res.status(201).json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      mobile: user.mobile,
-      picture: user.picture,
-      role: user.role,
-      status: user.status,
-      org: user.org,
-      monthlyBudgetLimit: user.monthlyBudgetLimit,
+      ...userObj,
       token: generateToken(user._id)
     });
   } catch (error) {
@@ -86,16 +83,10 @@ router.post('/login', async (req, res) => {
     user.lastLoginAt = Date.now();
     await user.save();
 
+    const userObj = user.toObject();
+    delete userObj.password;
     res.json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      mobile: user.mobile,
-      picture: user.picture,
-      role: user.role,
-      status: user.status,
-      org: user.org,
-      monthlyBudgetLimit: user.monthlyBudgetLimit,
+      ...userObj,
       token: generateToken(user._id)
     });
   } catch (error) {
@@ -118,16 +109,9 @@ router.put('/mobile', protect, async (req, res) => {
     if (user) {
       user.mobile = mobile;
       const updatedUser = await user.save();
-      res.json({
-        _id: updatedUser._id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        mobile: updatedUser.mobile,
-        role: updatedUser.role,
-        status: updatedUser.status,
-        org: updatedUser.org,
-        monthlyBudgetLimit: updatedUser.monthlyBudgetLimit
-      });
+      const userObj = updatedUser.toObject();
+      delete userObj.password;
+      res.json(userObj);
     } else {
       res.status(404).json({ message: 'User not found' });
     }
@@ -145,16 +129,9 @@ router.put('/budget', protect, async (req, res) => {
     if (user) {
       user.monthlyBudgetLimit = Number(monthlyBudgetLimit);
       const updatedUser = await user.save();
-      res.json({
-        _id: updatedUser._id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        mobile: updatedUser.mobile,
-        role: updatedUser.role,
-        status: updatedUser.status,
-        org: updatedUser.org,
-        monthlyBudgetLimit: updatedUser.monthlyBudgetLimit
-      });
+      const userObj = updatedUser.toObject();
+      delete userObj.password;
+      res.json(userObj);
     } else {
       res.status(404).json({ message: 'User not found' });
     }
@@ -216,25 +193,151 @@ router.post('/google', async (req, res) => {
         picture: picture || '',
         role: 'user',
         status: 'active',
-        org: 'default'
+        org: 'default',
+        plan: 'free',
+        planType: 'none',
+        planStatus: 'active'
       });
     }
 
+    const userObj = user.toObject();
+    delete userObj.password;
     res.json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      mobile: user.mobile,
-      picture: user.picture,
-      role: user.role,
-      status: user.status,
-      org: user.org,
-      monthlyBudgetLimit: user.monthlyBudgetLimit,
+      ...userObj,
       token: generateToken(user._id)
     });
   } catch (error) {
     console.error('Google Auth Error:', error);
     res.status(401).json({ message: 'Google authentication failed' });
+  }
+});
+
+// @route   PUT /api/auth/profile
+// @desc    Update profile info (name, photo)
+router.put('/profile', protect, async (req, res) => {
+  const { name, profilePhoto } = req.body;
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (name) user.name = name;
+    if (profilePhoto !== undefined) user.profilePhoto = profilePhoto;
+
+    const updatedUser = await user.save();
+    res.json(updatedUser);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error updating profile' });
+  }
+});
+
+// @route   PUT /api/auth/password
+// @desc    Update password
+router.put('/password', protect, async (req, res) => {
+  const { oldPassword, newPassword } = req.body;
+  try {
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ message: 'Please provide old and new passwords' });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const isMatch = await bcrypt.compare(oldPassword, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Incorrect old password' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    await user.save();
+
+    res.json({ message: 'Password updated successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error updating password' });
+  }
+});
+
+// @route   PUT /api/auth/settings
+// @desc    Update settings (theme, currency, notifications)
+router.put('/settings', protect, async (req, res) => {
+  const { theme, currency, notificationsEnabled } = req.body;
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (theme) user.theme = theme;
+    if (currency) user.currency = currency;
+    if (notificationsEnabled !== undefined) user.notificationsEnabled = notificationsEnabled;
+
+    const updatedUser = await user.save();
+    res.json(updatedUser);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error updating settings' });
+  }
+});
+
+// @route   PUT /api/auth/plan
+// @desc    Upgrade / change plan
+router.put('/plan', protect, async (req, res) => {
+  const { plan, billingCycle } = req.body;
+  try {
+    if (!['free', 'pro', 'enterprise'].includes(plan)) {
+      return res.status(400).json({ message: 'Invalid plan selected' });
+    }
+    if (billingCycle && !['monthly', 'yearly', 'none'].includes(billingCycle)) {
+      return res.status(400).json({ message: 'Invalid billing cycle selected' });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    user.plan = plan;
+    user.planType = billingCycle || (plan === 'free' ? 'none' : 'monthly');
+    user.planStatus = 'active';
+    user.planStartDate = new Date();
+    
+    // Set plan expiry date
+    if (user.planType === 'yearly') {
+      user.planExpiryDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    } else if (user.planType === 'monthly') {
+      user.planExpiryDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    } else {
+      user.planExpiryDate = new Date(Date.now() + 36500 * 24 * 60 * 60 * 1000); // 100 years for free plan
+    }
+
+    const updatedUser = await user.save();
+
+    // Create a notification for subscription changes
+    const Notification = require('../models/Notification');
+    await Notification.create({
+      userId: user._id,
+      title: 'Subscription Activated',
+      message: `Your account has been upgraded to the ${plan.toUpperCase()} (${user.planType}) plan. Thank you for subscribing!`,
+      type: 'expiry'
+    });
+
+    // Create a subscription log
+    const Subscription = require('../models/Subscription');
+    
+    // Pricing details: Pro (199 / 1999), Enterprise (499 / 4999), Free (0)
+    let amount = 0;
+    if (plan === 'pro') {
+      amount = user.planType === 'yearly' ? 1999 : 199;
+    } else if (plan === 'enterprise') {
+      amount = user.planType === 'yearly' ? 4999 : 499;
+    }
+
+    await Subscription.create({
+      userId: user._id,
+      plan,
+      amount
+    });
+
+    const userObj = updatedUser.toObject();
+    delete userObj.password;
+    res.json(userObj);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error upgrading subscription' });
   }
 });
 

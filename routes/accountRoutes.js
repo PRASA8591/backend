@@ -24,6 +24,22 @@ router.post('/', protect, async (req, res) => {
       return res.status(400).json({ message: 'Please provide account name and initial balance' });
     }
 
+    // Verify SaaS plan limits
+    const existingCount = await Account.countDocuments({ userId: req.user._id });
+    const plan = req.user.plan || 'free';
+
+    if (plan === 'free' && existingCount >= 1) {
+      return res.status(400).json({ 
+        message: 'Account limit reached! Free plan users can only manage 1 account. Please upgrade to Pro or Enterprise plan.' 
+      });
+    }
+
+    if (plan === 'pro' && existingCount >= 3) {
+      return res.status(400).json({ 
+        message: 'Account limit reached! Pro plan users can only manage up to 3 accounts. Please upgrade to Enterprise plan.' 
+      });
+    }
+
     const account = await Account.create({
       userId: req.user._id,
       name,

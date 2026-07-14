@@ -282,6 +282,52 @@ router.post('/users/:id/import', async (req, res) => {
   }
 });
 
+// @route   PUT /api/admin/users/:id/plan
+// @desc    Update user's subscription plan & planType (Admin action)
+router.put('/users/:id/plan', async (req, res) => {
+  const { plan, planType } = req.body;
+  try {
+    if (plan && !['free', 'pro', 'enterprise'].includes(plan)) {
+      return res.status(400).json({ message: 'Invalid plan selected' });
+    }
+    if (planType && !['monthly', 'yearly', 'none'].includes(planType)) {
+      return res.status(400).json({ message: 'Invalid plan billing cycle selected' });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (plan) user.plan = plan;
+    if (planType) user.planType = planType;
+    
+    // Automatically set expiration if upgraded by admin
+    if (plan && plan !== 'free') {
+      user.planStatus = 'active';
+      const durationDays = planType === 'yearly' ? 365 : 30;
+      user.planExpiryDate = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
+    } else if (plan === 'free') {
+      user.planType = 'none';
+      user.planStatus = 'active';
+    }
+
+    await user.save();
+
+    res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      plan: user.plan,
+      planType: user.planType,
+      planStatus: user.planStatus,
+      planExpiryDate: user.planExpiryDate
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error updating user plan' });
+  }
+});
+
 module.exports = router;
 
 
