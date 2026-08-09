@@ -128,10 +128,14 @@ router.post('/verify', async (req, res) => {
     }
 
     // Validate OTP correctness and expiration time
-    if (user.verificationCode === code.toString().trim() && user.codeExpiresAt && user.codeExpiresAt > Date.now()) {
+    const expiresAt = user.codeExpiresAt || user.verificationCodeExpires;
+    const isNotExpired = expiresAt && new Date(expiresAt).getTime() > Date.now();
+
+    if (user.verificationCode && user.verificationCode.toString().trim() === code.toString().trim() && isNotExpired) {
       user.isVerified = true;
       user.verificationCode = undefined;
       user.codeExpiresAt = undefined;
+      user.verificationCodeExpires = undefined;
       await user.save();
 
       const userObj = user.toObject();
@@ -324,6 +328,7 @@ router.post('/google', async (req, res) => {
       const hashedPassword = await bcrypt.hash(Math.random().toString(36), salt);
       const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
 
+      const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
       user = await User.create({
         name,
         email: email.toLowerCase(),
@@ -338,16 +343,20 @@ router.post('/google', async (req, res) => {
         planStatus: 'active',
         isVerified: false,
         verificationCode,
-        verificationCodeExpires: Date.now() + 10 * 60 * 1000,
+        codeExpiresAt: otpExpires,
+        verificationCodeExpires: otpExpires,
         authProvider: 'google'
       });
     }
 
     if (!user.isVerified) {
-      if (!user.verificationCode || !user.verificationCodeExpires || user.verificationCodeExpires < Date.now()) {
+      const expiresAt = user.codeExpiresAt || user.verificationCodeExpires;
+      if (!user.verificationCode || !expiresAt || new Date(expiresAt).getTime() < Date.now()) {
         const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+        const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
         user.verificationCode = verificationCode;
-        user.verificationCodeExpires = Date.now() + 10 * 60 * 1000;
+        user.codeExpiresAt = otpExpires;
+        user.verificationCodeExpires = otpExpires;
         await user.save();
       }
 
