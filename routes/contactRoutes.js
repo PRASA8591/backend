@@ -96,7 +96,7 @@ router.post('/:id/reply', protect, isManagerOrAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Support reply email error:', error);
-    res.status(500).json({ message: 'Failed to send reply email to client.' });
+    res.status(500).json({ message: error.message ? `Email error: ${error.message}` : 'Failed to send reply email to client.' });
   }
 });
 

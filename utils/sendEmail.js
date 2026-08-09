@@ -1,5 +1,8 @@
 const nodemailer = require('nodemailer');
 
+const ZOHO_USER = process.env.ZOHO_EMAIL || 'noreply@prasatek.lk';
+const ZOHO_PASS = process.env.ZOHO_PASSWORD || '49GwqcXhPctJ';
+
 // Configure Zoho SMTP Transporter using Port 587 (TLS/STARTTLS) for Render Cloud Compatibility
 const transporter = nodemailer.createTransport({
   host: 'smtp.zoho.com',
@@ -7,8 +10,8 @@ const transporter = nodemailer.createTransport({
   secure: false,       // 587 Port එක සඳහා secure: false විය යුතුය
   requireTLS: true,
   auth: {
-    user: process.env.ZOHO_EMAIL,
-    pass: process.env.ZOHO_PASSWORD,
+    user: ZOHO_USER,
+    pass: ZOHO_PASS,
   },
   tls: {
     rejectUnauthorized: false
@@ -20,13 +23,13 @@ const transporter = nodemailer.createTransport({
 
 // Function to send generic custom HTML emails (Ticket Replies, Notifications)
 const sendEmail = async (toEmail, subject, htmlContent, textContent = '') => {
-  if (!process.env.ZOHO_EMAIL || !process.env.ZOHO_PASSWORD) {
+  if (!ZOHO_USER || !ZOHO_PASS) {
     console.error('SMTP Config Error: ZOHO_EMAIL or ZOHO_PASSWORD environment variable is missing.');
     throw new Error('Email service configuration is missing on server.');
   }
 
   const mailOptions = {
-    from: `"No-Reply PrasaTek" <${process.env.ZOHO_EMAIL}>`,
+    from: `"No-Reply PrasaTek" <${ZOHO_USER}>`,
     to: toEmail,
     subject: subject,
     html: htmlContent,
@@ -45,13 +48,13 @@ const sendEmail = async (toEmail, subject, htmlContent, textContent = '') => {
 
 // Function to send 6-digit OTP verification codes
 const sendVerificationCode = async (toEmail, verificationCode) => {
-  if (!process.env.ZOHO_EMAIL || !process.env.ZOHO_PASSWORD) {
+  if (!ZOHO_USER || !ZOHO_PASS) {
     console.error('SMTP Config Error: ZOHO_EMAIL or ZOHO_PASSWORD environment variable is missing.');
     throw new Error('Email service configuration is missing on server.');
   }
 
   const mailOptions = {
-    from: `"No-Reply PrasaTek" <${process.env.ZOHO_EMAIL}>`,
+    from: `"No-Reply PrasaTek" <${ZOHO_USER}>`,
     to: toEmail,
     subject: 'Email Verification Code - PrasaTek',
     html: `
