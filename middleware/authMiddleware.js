@@ -18,13 +18,17 @@ const protect = async (req, res, next) => {
         return res.status(403).json({ message: 'Your account is suspended' });
       }
 
-      // Check Maintenance Mode
-      const maintenance = await SystemSetting.findOne({ key: 'maintenance_mode' });
-      if (maintenance && maintenance.value === true && req.user.role !== 'admin') {
-        return res.status(503).json({ 
-          message: 'System is currently undergoing scheduled maintenance. Non-admin users are logged out.',
-          maintenanceMode: true 
-        });
+      // Check Maintenance Mode safely (never throw or block on error)
+      try {
+        const maintenance = await SystemSetting.findOne({ key: 'maintenance_mode' });
+        if (maintenance && maintenance.value === true && req.user.role !== 'admin') {
+          return res.status(503).json({ 
+            message: 'System is currently undergoing scheduled maintenance. Non-admin users are logged out.',
+            maintenanceMode: true 
+          });
+        }
+      } catch (settingErr) {
+        console.error('Safe Maintenance Mode check error:', settingErr.message);
       }
 
       next();

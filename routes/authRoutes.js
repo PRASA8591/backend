@@ -202,14 +202,18 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ message: 'Your account is suspended' });
     }
 
-    // Check Maintenance Mode
-    const SystemSetting = require('../models/SystemSetting');
-    const maintenance = await SystemSetting.findOne({ key: 'maintenance_mode' });
-    if (maintenance && maintenance.value === true && user.role !== 'admin') {
-      return res.status(503).json({ 
-        message: 'System is currently undergoing scheduled maintenance. Non-admin logins are disabled.',
-        maintenanceMode: true 
-      });
+    // Check Maintenance Mode safely
+    try {
+      const SystemSetting = require('../models/SystemSetting');
+      const maintenance = await SystemSetting.findOne({ key: 'maintenance_mode' });
+      if (maintenance && maintenance.value === true && user.role !== 'admin') {
+        return res.status(503).json({ 
+          message: 'System is currently undergoing scheduled maintenance. Non-admin logins are disabled.',
+          maintenanceMode: true 
+        });
+      }
+    } catch (settingErr) {
+      console.error('Safe maintenance check error in login:', settingErr.message);
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -335,7 +339,7 @@ router.post('/google', async (req, res) => {
         plan: 'free',
         planType: 'none',
         planStatus: 'active',
-        isVerified: false,
+        isVerified: true,
         authProvider: 'google'
       });
     }
