@@ -9,7 +9,6 @@ const transactionRoutes = require('./routes/transactionRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const contactRoutes = require('./routes/contactRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
-
 const systemRoutes = require('./routes/systemRoutes');
 
 const app = express();
@@ -36,66 +35,69 @@ app.use('/api/notifications', notificationRoutes);
 
 // Health check endpoint
 app.get('/', (req, res) => {
-  res.json({ message: 'Expense Tracker Pro API is running...' });
+  res.json({ 
+    status: 'online',
+    message: 'Expense Tracker Pro API is running...',
+    dbStatus: mongoose.connection.readyState === 1 ? 'connected' : 'connecting'
+  });
 });
 
-// Database connection
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
+// Start server listening immediately so Cloud/Render health checks pass
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
+
+// Connect to MongoDB asynchronously
 if (!MONGO_URI) {
   console.error('CRITICAL: MONGO_URI environment variable is missing.');
-  process.exit(1);
-}
+} else {
+  mongoose.connect(MONGO_URI)
+    .then(async () => {
+      console.log('MongoDB connected successfully.');
 
-mongoose.connect(MONGO_URI)
-  .then(async () => {
-    console.log('MongoDB connected successfully.');
+      const cron = require('node-cron');
+      const User = require('./models/User');
+      const Transaction = require('./models/Transaction');
 
-    const cron = require('node-cron');
-    const User = require('./models/User');
-    const Transaction = require('./models/Transaction');
-
-    // Migrate existing users who do not have a plan field set to Enterprise
-    try {
-      const migrateResult = await User.updateMany(
-        { plan: { $exists: false } },
-        { $set: { plan: 'enterprise', planType: 'yearly', planStatus: 'active' } }
-      );
-      if (migrateResult.modifiedCount > 0) {
-        console.log(`Migration: Upgraded ${migrateResult.modifiedCount} existing users to Enterprise plan.`);
-      }
-    } catch (err) {
-      console.error('Migration Error:', err.message);
-    }
-
-    app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
-    });
-
-    // Start Daily Cron Job for Free Plan History Retention Cleanup (older than 90 days)
-    cron.schedule('0 0 * * *', async () => {
-      console.log('Cron: Starting daily transaction history retention cleanup for Free users...');
+      // Migrate existing users who do not have a plan field set to Enterprise
       try {
-        const cutoffTimestamp = Date.now() - (90 * 24 * 60 * 60 * 1000);
-        const freeUsers = await User.find({ plan: 'free' }).select('_id');
-        const freeUserIds = freeUsers.map(u => u._id);
-
-        if (freeUserIds.length > 0) {
-          const deleteResult = await Transaction.deleteMany({
-            userId: { $in: freeUserIds },
-            timestamp: { $lt: cutoffTimestamp }
-          });
-          console.log(`Cron: Successfully deleted ${deleteResult.deletedCount} transactions older than 90 days.`);
-        } else {
-          console.log('Cron: No Free plan users found.');
+        const migrateResult = await User.updateMany(
+          { plan: { $exists: false } },
+          { $set: { plan: 'enterprise', planType: 'yearly', planStatus: 'active' } }
+        );
+        if (migrateResult.modifiedCount > 0) {
+          console.log(`Migration: Upgraded ${migrateResult.modifiedCount} existing users to Enterprise plan.`);
         }
-      } catch (error) {
-        console.error('Cron: Error cleaning up transactions history:', error.message);
+      } catch (err) {
+        console.error('Migration Error:', err.message);
       }
+
+      // Start Daily Cron Job for Free Plan History Retention Cleanup (older than 90 days)
+      cron.schedule('0 0 * * *', async () => {
+        console.log('Cron: Starting daily transaction history retention cleanup for Free users...');
+        try {
+          const cutoffTimestamp = Date.now() - (90 * 24 * 60 * 60 * 1000);
+          const freeUsers = await User.find({ plan: 'free' }).select('_id');
+          const freeUserIds = freeUsers.map(u => u._id);
+
+          if (freeUserIds.length > 0) {
+            const deleteResult = await Transaction.deleteMany({
+              userId: { $in: freeUserIds },
+              timestamp: { $lt: cutoffTimestamp }
+            });
+            console.log(`Cron: Successfully deleted ${deleteResult.deletedCount} transactions older than 90 days.`);
+          } else {
+            console.log('Cron: No Free plan users found.');
+          }
+        } catch (error) {
+          console.error('Cron: Error cleaning up transactions history:', error.message);
+        }
+      });
+    })
+    .catch(err => {
+      console.error('MongoDB connection error:', err.message);
     });
-  })
-  .catch(err => {
-    console.error('MongoDB connection error:', err.message);
-    process.exit(1);
-  });
+}
