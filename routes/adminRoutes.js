@@ -418,15 +418,39 @@ router.post('/users/:id/import-backup', async (req, res) => {
           assignedAccountId = accountIdMap[tx.accountName];
         }
 
+        // Map type enum: Schema requires 'add' (income) or 'deduct' (expense)
+        let mappedType = 'deduct';
+        const rawType = String(tx.type || '').toLowerCase();
+        if (['add', 'income', 'deposit', 'credit'].includes(rawType)) {
+          mappedType = 'add';
+        } else if (['deduct', 'expense', 'withdrawal', 'debit'].includes(rawType)) {
+          mappedType = 'deduct';
+        }
+
+        // Date formatting (YYYY-MM-DD)
+        let dateVal = tx.date;
+        if (!dateVal) {
+          dateVal = new Date().toISOString().split('T')[0];
+        } else if (typeof dateVal !== 'string') {
+          dateVal = new Date(dateVal).toISOString().split('T')[0];
+        }
+
+        // Month formatting (YYYY-MM)
+        let monthVal = tx.month;
+        if (!monthVal || typeof monthVal !== 'string') {
+          monthVal = dateVal.substring(0, 7);
+        }
+
         return {
           userId: user._id, // Assign to target user
           accountId: assignedAccountId,
-          type: String(tx.type).toLowerCase() === 'income' ? 'income' : 'expense',
+          type: mappedType, // Enum: 'add' or 'deduct'
+          date: dateVal,
+          month: monthVal,
           category: tx.category || 'General',
           amount: Math.abs(Number(tx.amount || 0)),
-          description: tx.description || tx.note || tx.remarks || '',
-          date: tx.date ? new Date(tx.date) : new Date(),
-          timestamp: tx.timestamp || (tx.date ? new Date(tx.date).getTime() : Date.now())
+          description: tx.description || tx.note || tx.remarks || 'Imported Transaction',
+          timestamp: Number(tx.timestamp) || Date.now()
         };
       });
 
