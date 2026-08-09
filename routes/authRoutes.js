@@ -17,31 +17,27 @@ const generateToken = (id) => {
 };
 
 // @route   GET /api/auth/test-email-status
-// @desc    Diagnostic test route to verify live Zoho SMTP email sending on Render server
+// @desc    Diagnostic test route to verify live Resend API email sending on Render server
 router.get('/test-email-status', async (req, res) => {
   try {
     const testRecipient = req.query.email || 'info@prasatek.lk';
     const result = await sendVerificationCode(testRecipient, '999888');
     return res.status(200).json({
       success: true,
-      message: 'Zoho SMTP test email sent successfully from server!',
+      message: 'Resend API test email sent successfully from server!',
       result: result,
       envCheck: {
-        hasZohoEmail: !!process.env.ZOHO_EMAIL,
-        zohoEmailValue: process.env.ZOHO_EMAIL || 'MISSING',
-        hasZohoPass: !!process.env.ZOHO_PASSWORD
+        hasResendApiKey: !!process.env.RESEND_API_KEY
       }
     });
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message: 'Zoho SMTP Email Error on Server',
+      message: 'Resend API Email Error on Server',
       error: error.message,
       stack: error.stack,
       envCheck: {
-        hasZohoEmail: !!process.env.ZOHO_EMAIL,
-        zohoEmailValue: process.env.ZOHO_EMAIL || 'MISSING',
-        hasZohoPass: !!process.env.ZOHO_PASSWORD
+        hasResendApiKey: !!process.env.RESEND_API_KEY
       }
     });
   }

@@ -11,3 +11,5 @@ services:
         value: noreply@prasatek.lk
       - key: ZOHO_PASSWORD
         value: 49GwqcXhPctJ
+      - key: RESEND_API_KEY
+        sync: false
