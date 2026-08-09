@@ -326,6 +326,7 @@ router.post('/google', async (req, res) => {
     } else {
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(Math.random().toString(36), salt);
+      const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
 
       user = await User.create({
         name,
@@ -339,8 +340,31 @@ router.post('/google', async (req, res) => {
         plan: 'free',
         planType: 'none',
         planStatus: 'active',
-        isVerified: true,
+        isVerified: false,
+        verificationCode,
+        verificationCodeExpires: Date.now() + 10 * 60 * 1000,
         authProvider: 'google'
+      });
+    }
+
+    if (!user.isVerified) {
+      if (!user.verificationCode || !user.verificationCodeExpires || user.verificationCodeExpires < Date.now()) {
+        const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+        user.verificationCode = verificationCode;
+        user.verificationCodeExpires = Date.now() + 10 * 60 * 1000;
+        await user.save();
+      }
+
+      try {
+        await sendVerificationCode(user.email, user.verificationCode);
+      } catch (eErr) {
+        console.error('Failed to send Google verification code email:', eErr.message);
+      }
+
+      return res.json({
+        requiresVerification: true,
+        email: user.email,
+        message: 'Verification code sent to your Gmail address. Please check your inbox.'
       });
     }
 
