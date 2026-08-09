@@ -202,6 +202,16 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ message: 'Your account is suspended' });
     }
 
+    // Check Maintenance Mode
+    const SystemSetting = require('../models/SystemSetting');
+    const maintenance = await SystemSetting.findOne({ key: 'maintenance_mode' });
+    if (maintenance && maintenance.value === true && user.role !== 'admin') {
+      return res.status(503).json({ 
+        message: 'System is currently undergoing scheduled maintenance. Non-admin logins are disabled.',
+        maintenanceMode: true 
+      });
+    }
+
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid email or password' });

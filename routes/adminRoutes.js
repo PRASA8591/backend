@@ -508,32 +508,81 @@ router.put('/users/:id/plan', async (req, res) => {
   }
 });
 
+// @route   GET /api/admin/announcements
+// @desc    Get list of all system announcements with scheduled times
+router.get('/announcements', async (req, res) => {
+  try {
+    const Announcement = require('../models/Announcement');
+    const announcements = await Announcement.find({}).sort({ createdAt: -1 });
+    res.json(announcements);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error retrieving announcements' });
+  }
+});
+
 // @route   POST /api/admin/announcements
-// @desc    Send a global notification announcement to all users
+// @desc    Create & broadcast a scheduled system announcement
 router.post('/announcements', async (req, res) => {
-  const { title, message, type } = req.body;
+  const { title, message, type, scheduledStart, scheduledEnd } = req.body;
   try {
     if (!title || !message) {
       return res.status(400).json({ message: 'Title and message are required' });
     }
 
+    const Announcement = require('../models/Announcement');
     const Notification = require('../models/Notification');
     const users = await User.find({});
+
+    const newAnnouncement = await Announcement.create({
+      title,
+      message,
+      type: type || 'info',
+      scheduledStart: scheduledStart ? new Date(scheduledStart) : new Date(),
+      scheduledEnd: scheduledEnd ? new Date(scheduledEnd) : null,
+      createdByName: req.user?.name || 'Admin'
+    });
 
     const notifications = users.map(u => ({
       userId: u._id,
       title,
       message,
-      type: type || 'info'
+      type: type === 'warning' ? 'system' : 'feature'
     }));
 
     await Notification.insertMany(notifications);
-
     await logAuditAction(req, 'ANNOUNCEMENT_BROADCAST', `Broadcasted announcement "${title}" to ${users.length} users`, '', 'info');
 
-    res.status(201).json({ message: `Announcement broadcasted successfully to ${users.length} users.` });
+    res.status(201).json({
+      message: `Announcement broadcasted successfully to ${users.length} users.`,
+      announcement: newAnnouncement
+    });
   } catch (error) {
+    console.error('Announcement Error:', error);
     res.status(500).json({ message: 'Server error broadcasting announcement' });
+  }
+});
+
+// @route   DELETE /api/admin/announcements/:id
+// @desc    Delete a system announcement and clean up user notification feeds
+router.delete('/announcements/:id', async (req, res) => {
+  try {
+    const Announcement = require('../models/Announcement');
+    const Notification = require('../models/Notification');
+
+    const announcement = await Announcement.findById(req.params.id);
+    if (!announcement) {
+      return res.status(404).json({ message: 'Announcement not found' });
+    }
+
+    // Delete matching notifications by title
+    await Notification.deleteMany({ title: announcement.title });
+    await announcement.deleteOne();
+
+    await logAuditAction(req, 'ANNOUNCEMENT_DELETE', `Deleted announcement "${announcement.title}"`, '', 'warning');
+
+    res.json({ message: 'Announcement and associated notifications deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error deleting announcement' });
   }
 });
 

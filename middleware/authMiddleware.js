@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const SystemSetting = require('../models/SystemSetting');
 
 const protect = async (req, res, next) => {
   let token;
@@ -15,6 +16,15 @@ const protect = async (req, res, next) => {
 
       if (req.user.status === 'suspended') {
         return res.status(403).json({ message: 'Your account is suspended' });
+      }
+
+      // Check Maintenance Mode
+      const maintenance = await SystemSetting.findOne({ key: 'maintenance_mode' });
+      if (maintenance && maintenance.value === true && req.user.role !== 'admin') {
+        return res.status(503).json({ 
+          message: 'System is currently undergoing scheduled maintenance. Non-admin users are logged out.',
+          maintenanceMode: true 
+        });
       }
 
       next();
