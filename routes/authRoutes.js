@@ -749,5 +749,110 @@ router.put('/savings-goal', protect, async (req, res) => {
   }
 });
 
+// @route   POST /api/auth/forgot-password
+// @desc    Initiate password reset by sending 6-digit OTP to user email
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  try {
+    if (!email) {
+      return res.status(400).json({ message: 'Please provide registered email address' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ message: 'No account registered with this email address.' });
+    }
+
+    // Google-only account check (manually registered users have hashed password)
+    if (!user.password) {
+      return res.status(400).json({
+        message: 'Password reset is only available for manually registered email accounts. Accounts registered via Google OAuth do not use passwords.'
+      });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    user.verificationCode = otp;
+    user.codeExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+    await user.save();
+
+    await sendVerificationCode(user.email, otp);
+
+    res.json({
+      message: `A 6-digit verification code has been sent to ${user.email}.`,
+      email: user.email
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ message: 'Server error processing password reset request' });
+  }
+});
+
+// @route   POST /api/auth/verify-reset-code
+// @desc    Verify 6-digit OTP for password reset
+router.post('/verify-reset-code', async (req, res) => {
+  const { email, code } = req.body;
+  try {
+    if (!email || !code) {
+      return res.status(400).json({ message: 'Email and verification code are required' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.verificationCode || user.verificationCode !== code.trim()) {
+      return res.status(400).json({ message: 'Invalid 6-digit verification code.' });
+    }
+
+    if (user.codeExpiresAt && user.codeExpiresAt < new Date()) {
+      return res.status(400).json({ message: 'Verification code has expired. Please request a new code.' });
+    }
+
+    res.json({ message: 'Verification code confirmed. You may now set a new password.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error verifying reset code' });
+  }
+});
+
+// @route   POST /api/auth/reset-password-with-code
+// @desc    Reset user password using verified OTP code
+router.post('/reset-password-with-code', async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  try {
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    if (newPassword.trim().length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters long' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.verificationCode || user.verificationCode !== code.trim()) {
+      return res.status(400).json({ message: 'Invalid verification code.' });
+    }
+
+    if (user.codeExpiresAt && user.codeExpiresAt < new Date()) {
+      return res.status(400).json({ message: 'Verification code has expired.' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    user.verificationCode = undefined;
+    user.codeExpiresAt = undefined;
+    user.isVerified = true;
+    await user.save();
+
+    res.json({ message: 'Password updated successfully! Redirecting to login page...' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error resetting password' });
+  }
+});
+
 module.exports = router;
 

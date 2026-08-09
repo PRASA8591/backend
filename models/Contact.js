@@ -9,6 +9,10 @@ const ContactSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  mobile: {
+    type: String,
+    default: ''
+  },
   category: {
     type: String,
     required: true
@@ -23,8 +27,15 @@ const ContactSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['unread', 'read'],
+    enum: ['unread', 'read', 'replied', 'resolved'],
     default: 'unread'
+  },
+  adminReply: {
+    type: String,
+    default: ''
+  },
+  repliedAt: {
+    type: Date
   },
   createdAt: {
     type: Date,
