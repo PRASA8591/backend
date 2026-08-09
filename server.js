@@ -45,8 +45,8 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
-// Start server listening immediately so Cloud/Render health checks pass
-app.listen(PORT, () => {
+// Start server listening immediately on 0.0.0.0 so Render host proxy routes traffic
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on port ${PORT}`);
 });
 
