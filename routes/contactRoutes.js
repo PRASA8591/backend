@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Contact = require('../models/Contact');
-const sendEmail = require('../utils/sendEmail');
+const { sendEmail } = require('../utils/sendEmail');
 const { protect, isManagerOrAdmin } = require('../middleware/authMiddleware');
 
 // @route   POST /api/contacts

@@ -18,7 +18,32 @@ const transporter = nodemailer.createTransport({
   socketTimeout: 15000
 });
 
-// Function to send verification code
+// Function to send generic custom HTML emails (Ticket Replies, Notifications)
+const sendEmail = async (toEmail, subject, htmlContent, textContent = '') => {
+  if (!process.env.ZOHO_EMAIL || !process.env.ZOHO_PASSWORD) {
+    console.error('SMTP Config Error: ZOHO_EMAIL or ZOHO_PASSWORD environment variable is missing.');
+    throw new Error('Email service configuration is missing on server.');
+  }
+
+  const mailOptions = {
+    from: `"No-Reply PrasaTek" <${process.env.ZOHO_EMAIL}>`,
+    to: toEmail,
+    subject: subject,
+    html: htmlContent,
+    text: textContent || subject
+  };
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`Custom email sent to ${toEmail}. Subject: "${subject}". MessageId: ${info.messageId}`);
+    return info;
+  } catch (error) {
+    console.error(`Failed to send email to ${toEmail}:`, error.message);
+    throw error;
+  }
+};
+
+// Function to send 6-digit OTP verification codes
 const sendVerificationCode = async (toEmail, verificationCode) => {
   if (!process.env.ZOHO_EMAIL || !process.env.ZOHO_PASSWORD) {
     console.error('SMTP Config Error: ZOHO_EMAIL or ZOHO_PASSWORD environment variable is missing.');
@@ -39,7 +64,7 @@ const sendVerificationCode = async (toEmail, verificationCode) => {
 
         <div style="border-top: 1px solid #f1f5f9; padding-top: 20px;">
           <h3 style="color: #1e293b; font-size: 18px; margin-bottom: 12px; font-weight: 700;">Email Verification</h3>
-          <p style="color: #475569; font-size: 14px; line-height: 1.5;">Please use the following 6-digit verification code to complete your registration:</p>
+          <p style="color: #475569; font-size: 14px; line-height: 1.5;">Please use the following 6-digit verification code to complete your verification:</p>
           
           <div style="text-align: center; margin: 24px 0; background-color: #f8fafc; padding: 18px; border-radius: 12px; border: 1px dashed #cbd5e1;">
             <h1 style="color: #0b8c5a; letter-spacing: 8px; font-size: 34px; margin: 0; font-family: 'Courier New', Courier, monospace; font-weight: bold;">${verificationCode}</h1>
@@ -83,4 +108,7 @@ const sendVerificationCode = async (toEmail, verificationCode) => {
   }
 };
 
+// Export sendVerificationCode as default function for backward compatibility
 module.exports = sendVerificationCode;
+module.exports.sendEmail = sendEmail;
+module.exports.sendVerificationCode = sendVerificationCode;
