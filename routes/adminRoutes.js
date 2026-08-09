@@ -335,6 +335,98 @@ router.get('/users/:id/financials', async (req, res) => {
   }
 });
 
+// @route   POST /api/admin/users/:id/import-backup
+// @desc    Import accounts & transactions JSON backup into a specific user's account
+router.post('/users/:id/import-backup', async (req, res) => {
+  const { accounts, transactions } = req.body;
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: 'Target user not found' });
+    }
+
+    if (!Array.isArray(accounts) && !Array.isArray(transactions)) {
+      return res.status(400).json({ message: 'Invalid backup file format. JSON must contain accounts or transactions array.' });
+    }
+
+    let createdAccountsCount = 0;
+    let createdTransactionsCount = 0;
+    const accountIdMap = {};
+
+    // 1. Process Accounts
+    if (Array.isArray(accounts) && accounts.length > 0) {
+      for (const acc of accounts) {
+        const newAcc = await Account.create({
+          userId: user._id,
+          name: acc.name || 'Imported Account',
+          type: acc.type || 'cash',
+          initialBalance: Number(acc.initialBalance || acc.balance || 0)
+        });
+        createdAccountsCount++;
+
+        if (acc._id) accountIdMap[acc._id.toString()] = newAcc._id;
+        if (acc.id) accountIdMap[acc.id.toString()] = newAcc._id;
+        if (acc.name) accountIdMap[acc.name] = newAcc._id;
+      }
+    }
+
+    // Ensure default account exists for target user
+    let defaultUserAccount = await Account.findOne({ userId: user._id });
+    if (!defaultUserAccount) {
+      defaultUserAccount = await Account.create({
+        userId: user._id,
+        name: 'Main Account',
+        type: 'cash',
+        initialBalance: 0
+      });
+      createdAccountsCount++;
+    }
+
+    // 2. Process Transactions
+    if (Array.isArray(transactions) && transactions.length > 0) {
+      const txDocs = transactions.map(tx => {
+        let assignedAccountId = defaultUserAccount._id;
+        if (tx.accountId && accountIdMap[tx.accountId.toString()]) {
+          assignedAccountId = accountIdMap[tx.accountId.toString()];
+        } else if (tx.accountName && accountIdMap[tx.accountName]) {
+          assignedAccountId = accountIdMap[tx.accountName];
+        }
+
+        return {
+          userId: user._id,
+          accountId: assignedAccountId,
+          type: tx.type === 'income' ? 'income' : 'expense',
+          category: tx.category || 'General',
+          amount: Number(tx.amount || 0),
+          description: tx.description || tx.note || '',
+          date: tx.date ? new Date(tx.date) : new Date(),
+          timestamp: tx.timestamp || Date.now()
+        };
+      });
+
+      const insertedTxs = await Transaction.insertMany(txDocs);
+      createdTransactionsCount = insertedTxs.length;
+    }
+
+    await logAuditAction(
+      req, 
+      'BACKUP_IMPORT', 
+      `Imported JSON backup for user ${user.email}: ${createdAccountsCount} accounts, ${createdTransactionsCount} transactions created`, 
+      user.email, 
+      'warning'
+    );
+
+    res.json({
+      message: `Backup successfully imported into ${user.name}'s account!`,
+      importedAccounts: createdAccountsCount,
+      importedTransactions: createdTransactionsCount
+    });
+  } catch (error) {
+    console.error('Import Backup Error:', error);
+    res.status(500).json({ message: error.message || 'Failed to import backup JSON data.' });
+  }
+});
+
 // @route   DELETE /api/admin/users/:id
 // @desc    Delete a user profile and cascade delete all their accounts/transactions
 router.delete('/users/:id', async (req, res) => {
