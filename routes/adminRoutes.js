@@ -336,29 +336,55 @@ router.get('/users/:id/financials', async (req, res) => {
 });
 
 // @route   POST /api/admin/users/:id/import-backup
-// @desc    Import accounts & transactions JSON backup into a specific user's account
+// @desc    Import accounts & transactions JSON backup into a specific user's account (strips old userId)
 router.post('/users/:id/import-backup', async (req, res) => {
-  const { accounts, transactions } = req.body;
+  const body = req.body || {};
   try {
     const user = await User.findById(req.params.id);
     if (!user) {
       return res.status(404).json({ message: 'Target user not found' });
     }
 
-    if (!Array.isArray(accounts) && !Array.isArray(transactions)) {
-      return res.status(400).json({ message: 'Invalid backup file format. JSON must contain accounts or transactions array.' });
+    // Extract accounts array from all possible JSON schema formats
+    let accountsList = [];
+    if (Array.isArray(body.accounts)) accountsList = body.accounts;
+    else if (Array.isArray(body.Accounts)) accountsList = body.Accounts;
+    else if (Array.isArray(body.account)) accountsList = body.account;
+    else if (Array.isArray(body.Account)) accountsList = body.Account;
+    else if (body.data && Array.isArray(body.data.accounts)) accountsList = body.data.accounts;
+
+    // Extract transactions array from all possible JSON schema formats
+    let transactionsList = [];
+    if (Array.isArray(body.transactions)) transactionsList = body.transactions;
+    else if (Array.isArray(body.Transactions)) transactionsList = body.Transactions;
+    else if (Array.isArray(body.history)) transactionsList = body.history;
+    else if (Array.isArray(body.History)) transactionsList = body.History;
+    else if (Array.isArray(body.transaction)) transactionsList = body.transaction;
+    else if (Array.isArray(body.Transaction)) transactionsList = body.Transaction;
+    else if (body.data && Array.isArray(body.data.transactions)) transactionsList = body.data.transactions;
+    else if (body.data && Array.isArray(body.data.history)) transactionsList = body.data.history;
+    else if (Array.isArray(body)) {
+      if (body.length > 0 && (body[0].initialBalance !== undefined || body[0].type === 'cash' || body[0].type === 'bank')) {
+        accountsList = body;
+      } else {
+        transactionsList = body;
+      }
+    }
+
+    if (accountsList.length === 0 && transactionsList.length === 0) {
+      return res.status(400).json({ message: 'No accounts or transactions found in uploaded JSON backup file.' });
     }
 
     let createdAccountsCount = 0;
     let createdTransactionsCount = 0;
     const accountIdMap = {};
 
-    // 1. Process Accounts
-    if (Array.isArray(accounts) && accounts.length > 0) {
-      for (const acc of accounts) {
+    // 1. Process & Import Accounts for target user (override old userId)
+    if (accountsList.length > 0) {
+      for (const acc of accountsList) {
         const newAcc = await Account.create({
-          userId: user._id,
-          name: acc.name || 'Imported Account',
+          userId: user._id, // Assign to target user
+          name: acc.name || acc.accountName || 'Imported Account',
           type: acc.type || 'cash',
           initialBalance: Number(acc.initialBalance || acc.balance || 0)
         });
@@ -382,9 +408,9 @@ router.post('/users/:id/import-backup', async (req, res) => {
       createdAccountsCount++;
     }
 
-    // 2. Process Transactions
-    if (Array.isArray(transactions) && transactions.length > 0) {
-      const txDocs = transactions.map(tx => {
+    // 2. Process & Import Transactions for target user (override old userId)
+    if (transactionsList.length > 0) {
+      const txDocs = transactionsList.map(tx => {
         let assignedAccountId = defaultUserAccount._id;
         if (tx.accountId && accountIdMap[tx.accountId.toString()]) {
           assignedAccountId = accountIdMap[tx.accountId.toString()];
@@ -393,14 +419,14 @@ router.post('/users/:id/import-backup', async (req, res) => {
         }
 
         return {
-          userId: user._id,
+          userId: user._id, // Assign to target user
           accountId: assignedAccountId,
-          type: tx.type === 'income' ? 'income' : 'expense',
+          type: String(tx.type).toLowerCase() === 'income' ? 'income' : 'expense',
           category: tx.category || 'General',
-          amount: Number(tx.amount || 0),
-          description: tx.description || tx.note || '',
+          amount: Math.abs(Number(tx.amount || 0)),
+          description: tx.description || tx.note || tx.remarks || '',
           date: tx.date ? new Date(tx.date) : new Date(),
-          timestamp: tx.timestamp || Date.now()
+          timestamp: tx.timestamp || (tx.date ? new Date(tx.date).getTime() : Date.now())
         };
       });
 
@@ -417,7 +443,7 @@ router.post('/users/:id/import-backup', async (req, res) => {
     );
 
     res.json({
-      message: `Backup successfully imported into ${user.name}'s account!`,
+      message: `Backup successfully imported into ${user.name}'s account! Created ${createdAccountsCount} accounts and ${createdTransactionsCount} transactions.`,
       importedAccounts: createdAccountsCount,
       importedTransactions: createdTransactionsCount
     });
