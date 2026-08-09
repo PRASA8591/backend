@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: backend-wkpm
+    name: backend-xolk
     env: node
     buildCommand: npm install
     startCommand: node server.js

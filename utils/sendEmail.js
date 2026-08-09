@@ -1,13 +1,30 @@
 const nodemailer = require('nodemailer');
 
-const ZOHO_USER = process.env.ZOHO_EMAIL || 'noreply@prasatek.lk';
-const ZOHO_PASS = process.env.ZOHO_PASSWORD || '49GwqcXhPctJ';
+const ZOHO_USER = (process.env.ZOHO_EMAIL || 'noreply@prasatek.lk').trim();
+const ZOHO_PASS = (process.env.ZOHO_PASSWORD || '49GwqcXhPctJ').trim();
 
-// Configure Zoho SMTP Transporter using Port 587 (TLS/STARTTLS) for Render Cloud Compatibility
-const transporter = nodemailer.createTransport({
+// Configure Primary Zoho Transporter (Port 465 SSL)
+const primaryTransporter = nodemailer.createTransport({
   host: 'smtp.zoho.com',
-  port: 587,          // 465 වෙනුවට 587 යොදන්න
-  secure: false,       // 587 Port එක සඳහා secure: false විය යුතුය
+  port: 465,
+  secure: true,
+  auth: {
+    user: ZOHO_USER,
+    pass: ZOHO_PASS,
+  },
+  tls: {
+    rejectUnauthorized: false
+  },
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 15000
+});
+
+// Configure Fallback Zoho Transporter (Port 587 STARTTLS)
+const fallbackTransporter = nodemailer.createTransport({
+  host: 'smtp.zoho.com',
+  port: 587,
+  secure: false,
   requireTLS: true,
   auth: {
     user: ZOHO_USER,
@@ -20,6 +37,25 @@ const transporter = nodemailer.createTransport({
   greetingTimeout: 10000,
   socketTimeout: 15000
 });
+
+// Helper function to send email with automatic port fallback
+const dispatchMail = async (mailOptions) => {
+  try {
+    const info = await primaryTransporter.sendMail(mailOptions);
+    console.log(`[SMTP Port 465] Email sent to ${mailOptions.to}. MessageId: ${info.messageId}`);
+    return info;
+  } catch (primaryErr) {
+    console.warn(`[SMTP Port 465 Primary Failed: ${primaryErr.message}]. Retrying with Port 587 STARTTLS...`);
+    try {
+      const info = await fallbackTransporter.sendMail(mailOptions);
+      console.log(`[SMTP Port 587 Fallback] Email sent to ${mailOptions.to}. MessageId: ${info.messageId}`);
+      return info;
+    } catch (fallbackErr) {
+      console.error(`[SMTP Port 587 Fallback Failed: ${fallbackErr.message}]`);
+      throw fallbackErr;
+    }
+  }
+};
 
 // Function to send generic custom HTML emails (Ticket Replies, Notifications)
 const sendEmail = async (toEmail, subject, htmlContent, textContent = '') => {
@@ -36,14 +72,7 @@ const sendEmail = async (toEmail, subject, htmlContent, textContent = '') => {
     text: textContent || subject
   };
 
-  try {
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`Custom email sent to ${toEmail}. Subject: "${subject}". MessageId: ${info.messageId}`);
-    return info;
-  } catch (error) {
-    console.error(`Failed to send email to ${toEmail}:`, error.message);
-    throw error;
-  }
+  return await dispatchMail(mailOptions);
 };
 
 // Function to send 6-digit OTP verification codes
@@ -101,14 +130,7 @@ const sendVerificationCode = async (toEmail, verificationCode) => {
     `,
   };
 
-  try {
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`Verification email sent to ${toEmail}. MessageId: ${info.messageId}`);
-    return info;
-  } catch (error) {
-    console.error(`Failed to send verification email to ${toEmail}:`, error.message);
-    throw error;
-  }
+  return await dispatchMail(mailOptions);
 };
 
 module.exports = sendVerificationCode;
