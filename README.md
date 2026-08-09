@@ -78,5 +78,16 @@ This backend is configured for automated deployment on **Render**:
 
 ---
 
+## 📞 Contact & Support
+
+For technical inquiries, custom branch deployments, or support:
+- **Company**: PrasaTek System Solutions
+- **Website**: [www.prasatek.lk](https://www.prasatek.lk)
+- **Contact Email**: [info@prasatek.lk](mailto:info@prasatek.lk)
+- **Mobile Hotline**: [+94 71 932 3239](tel:0719323239) / `0719323239`
+- **Headquarters**: Kottawa Road, Colombo District, Sri Lanka
+
+---
+
 ## 🛡️ License & Copyright
 © PrasaTek System Solutions. All rights reserved.
