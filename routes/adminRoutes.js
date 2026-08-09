@@ -1,14 +1,116 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Account = require('../models/Account');
 const Transaction = require('../models/Transaction');
+const AuditLog = require('../models/AuditLog');
+const SystemSetting = require('../models/SystemSetting');
 const { protect, isManagerOrAdmin } = require('../middleware/authMiddleware');
+
+// Helper to record audit logs
+const logAuditAction = async (req, action, details, targetUser = '', severity = 'info') => {
+  try {
+    await AuditLog.create({
+      adminId: req.user?._id,
+      adminName: req.user?.name || 'System Admin',
+      action,
+      details,
+      targetUser,
+      severity,
+      ipAddress: req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1'
+    });
+  } catch (err) {
+    console.error('AuditLog Error:', err.message);
+  }
+};
 
 // Apply middleware to all admin routes
 router.use(protect);
 router.use(isManagerOrAdmin);
+
+// @route   GET /api/admin/system-health
+// @desc    Get Node.js server telemetry & database metrics
+router.get('/system-health', async (req, res) => {
+  try {
+    const memoryUsage = process.memoryUsage();
+    const uptimeSeconds = process.uptime();
+    
+    // DB ping check
+    const dbState = mongoose.connection.readyState;
+    const dbStateLabels = ['Disconnected', 'Connected', 'Connecting', 'Disconnecting'];
+
+    res.json({
+      uptimeSeconds: Math.floor(uptimeSeconds),
+      uptimeFormatted: `${Math.floor(uptimeSeconds / 3600)}h ${Math.floor((uptimeSeconds % 3600) / 60)}m ${Math.floor(uptimeSeconds % 60)}s`,
+      memoryRssMb: (memoryUsage.rss / 1024 / 1024).toFixed(2),
+      memoryHeapMb: (memoryUsage.heapUsed / 1024 / 1024).toFixed(2),
+      nodeVersion: process.version,
+      platform: process.platform,
+      dbStatus: dbStateLabels[dbState] || 'Unknown',
+      serverTime: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error retrieving system health' });
+  }
+});
+
+// @route   GET /api/admin/audit-logs
+// @desc    Get recent security and administrative audit logs
+router.get('/audit-logs', async (req, res) => {
+  try {
+    const logs = await AuditLog.find({}).sort({ timestamp: -1 }).limit(100);
+    res.json(logs);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error retrieving audit logs' });
+  }
+});
+
+// @route   GET /api/admin/system-settings
+// @desc    Get system settings (maintenance mode, announcement banner)
+router.get('/system-settings', async (req, res) => {
+  try {
+    const maintenance = await SystemSetting.findOne({ key: 'maintenance_mode' });
+    const banner = await SystemSetting.findOne({ key: 'global_banner' });
+    
+    res.json({
+      maintenanceMode: maintenance ? maintenance.value : false,
+      globalBanner: banner ? banner.value : { enabled: false, message: '', type: 'info' }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error retrieving system settings' });
+  }
+});
+
+// @route   POST /api/admin/system-settings
+// @desc    Update system settings (maintenance mode or global banner)
+router.post('/system-settings', async (req, res) => {
+  const { maintenanceMode, globalBanner } = req.body;
+  try {
+    if (typeof maintenanceMode !== 'undefined') {
+      await SystemSetting.findOneAndUpdate(
+        { key: 'maintenance_mode' },
+        { value: !!maintenanceMode, updatedAt: new Date() },
+        { upsert: true }
+      );
+      await logAuditAction(req, 'MAINTENANCE_TOGGLE', `Maintenance mode set to ${maintenanceMode}`, '', 'warning');
+    }
+
+    if (globalBanner) {
+      await SystemSetting.findOneAndUpdate(
+        { key: 'global_banner' },
+        { value: globalBanner, updatedAt: new Date() },
+        { upsert: true }
+      );
+      await logAuditAction(req, 'GLOBAL_BANNER_UPDATE', `Updated global system banner: "${globalBanner.message}"`, '', 'info');
+    }
+
+    res.json({ message: 'System settings updated successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error updating system settings' });
+  }
+});
 
 // @route   GET /api/admin/users
 // @desc    Get all users (sorted by last login)
@@ -29,12 +131,9 @@ router.get('/stats', async (req, res) => {
     const privilegedUsers = await User.countDocuments({ role: { $in: ['admin', 'manager'] } });
     const suspendedUsers = await User.countDocuments({ status: 'suspended' });
     
-    // Aggregation for unique organizations
     const uniqueOrgs = await User.distinct('org');
-    // Ensure default is counted if not present, or return distinct size
     const totalOrgs = Math.max(uniqueOrgs.length, 1);
 
-    // Advanced breakdowns
     const freeUsers = await User.countDocuments({ plan: 'free' });
     const proUsers = await User.countDocuments({ plan: 'pro' });
     const enterpriseUsers = await User.countDocuments({ plan: 'enterprise' });
@@ -61,7 +160,7 @@ router.get('/stats', async (req, res) => {
 // @route   POST /api/admin/users
 // @desc    Create a user manually (admin action)
 router.post('/users', async (req, res) => {
-  const { email, name, password, role, status, org } = req.body;
+  const { email, name, password, role, status, org, isVerified } = req.body;
   try {
     if (!email) {
       return res.status(400).json({ message: 'Please provide email address' });
@@ -75,7 +174,6 @@ router.post('/users', async (req, res) => {
       return res.status(400).json({ message: 'User with this email already exists' });
     }
 
-    // Hash password (default: prasatek123)
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password || 'prasatek123', salt);
 
@@ -85,8 +183,11 @@ router.post('/users', async (req, res) => {
       password: hashedPassword,
       role: role || 'user',
       status: status || 'active',
-      org: org || 'default'
+      org: org || 'default',
+      isVerified: isVerified !== undefined ? isVerified : true
     });
+
+    await logAuditAction(req, 'USER_CREATE', `Created new user profile (${newUser.email}) with role ${newUser.role}`, newUser.email, 'info');
 
     res.status(201).json({
       _id: newUser._id,
@@ -95,6 +196,7 @@ router.post('/users', async (req, res) => {
       role: newUser.role,
       status: newUser.status,
       org: newUser.org,
+      isVerified: newUser.isVerified,
       lastLoginAt: newUser.lastLoginAt
     });
   } catch (error) {
@@ -102,6 +204,52 @@ router.post('/users', async (req, res) => {
   }
 });
 
+// @route   PUT /api/admin/users/:id/password
+// @desc    Admin manual password reset for a user
+router.put('/users/:id/password', async (req, res) => {
+  const { newPassword } = req.body;
+  try {
+    if (!newPassword || newPassword.trim().length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters long' });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    await user.save();
+
+    await logAuditAction(req, 'PASSWORD_RESET', `Admin manually reset password for user ${user.email}`, user.email, 'warning');
+
+    res.json({ message: `Password for ${user.email} successfully updated.` });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error resetting user password' });
+  }
+});
+
+// @route   PUT /api/admin/users/:id/verify
+// @desc    Admin manual toggle of email verification status
+router.put('/users/:id/verify', async (req, res) => {
+  const { isVerified } = req.body;
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    user.isVerified = !!isVerified;
+    await user.save();
+
+    await logAuditAction(req, 'VERIFY_TOGGLE', `Admin changed email verification status for ${user.email} to ${user.isVerified}`, user.email, 'info');
+
+    res.json({ message: `Email verification for ${user.email} set to ${user.isVerified}`, isVerified: user.isVerified });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error updating verification status' });
+  }
+});
 
 // @route   PUT /api/admin/users/:id/role
 // @desc    Update a user's role
@@ -117,8 +265,12 @@ router.put('/users/:id/role', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const oldRole = user.role;
     user.role = role;
     await user.save();
+
+    await logAuditAction(req, 'ROLE_UPDATE', `Changed role of ${user.email} from ${oldRole} to ${role}`, user.email, 'warning');
+
     res.json({ message: 'User role updated successfully', role: user.role });
   } catch (error) {
     res.status(500).json({ message: 'Server error updating user role' });
@@ -141,6 +293,9 @@ router.put('/users/:id/status', async (req, res) => {
 
     user.status = status;
     await user.save();
+
+    await logAuditAction(req, 'STATUS_UPDATE', `Updated user status for ${user.email} to ${status}`, user.email, status === 'suspended' ? 'warning' : 'info');
+
     res.json({ message: 'User status updated successfully', status: user.status });
   } catch (error) {
     res.status(500).json({ message: 'Server error updating user status' });
@@ -159,6 +314,9 @@ router.put('/users/:id/org', async (req, res) => {
 
     user.org = org || 'default';
     await user.save();
+
+    await logAuditAction(req, 'ORG_UPDATE', `Updated branch for ${user.email} to ${user.org}`, user.email, 'info');
+
     res.json({ message: 'User organization updated successfully', org: user.org });
   } catch (error) {
     res.status(500).json({ message: 'Server error updating user organization' });
@@ -186,16 +344,17 @@ router.delete('/users/:id', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Protect Master Admin from deletion
     if (['admin@prasatek.site', 'admin@prasatek.lk'].includes(user.email.toLowerCase())) {
       return res.status(400).json({ message: 'Master System Admin cannot be deleted' });
     }
 
-    // Cascade delete associated models
+    const targetEmail = user.email;
     await Account.deleteMany({ userId: user._id });
     await Transaction.deleteMany({ userId: user._id });
-    
     await user.deleteOne();
+
+    await logAuditAction(req, 'USER_DELETE', `Deleted user ${targetEmail} and all associated financial records`, targetEmail, 'critical');
+
     res.json({ message: 'User and all associated financial records deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error deleting user profile' });
@@ -212,6 +371,8 @@ router.delete('/accounts/:id', async (req, res) => {
     }
 
     await account.deleteOne();
+    await logAuditAction(req, 'ACCOUNT_DELETE', `Deleted account "${account.name}"`, '', 'info');
+
     res.json({ message: 'Account deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error deleting user account' });
@@ -228,6 +389,8 @@ router.delete('/transactions/:id', async (req, res) => {
     }
 
     await transaction.deleteOne();
+    await logAuditAction(req, 'TRANSACTION_DELETE', `Deleted transaction "${transaction.description}" of amount ${transaction.amount}`, '', 'info');
+
     res.json({ message: 'Transaction deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error deleting user transaction' });
@@ -288,6 +451,8 @@ router.post('/users/:id/import', async (req, res) => {
       }
     }
 
+    await logAuditAction(req, 'DATA_IMPORT', `Imported ${accounts?.length || 0} accounts and ${transactions?.length || 0} transactions for ${user.email}`, user.email, 'info');
+
     res.json({ message: 'Data imported successfully' });
   } catch (error) {
     console.error('Import error:', error);
@@ -312,10 +477,10 @@ router.put('/users/:id/plan', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const oldPlan = user.plan;
     if (plan) user.plan = plan;
     if (planType) user.planType = planType;
     
-    // Automatically set expiration if upgraded by admin
     if (plan && plan !== 'free') {
       user.planStatus = 'active';
       const durationDays = planType === 'yearly' ? 365 : 30;
@@ -326,6 +491,8 @@ router.put('/users/:id/plan', async (req, res) => {
     }
 
     await user.save();
+
+    await logAuditAction(req, 'PLAN_UPDATE', `Upgraded plan for ${user.email} from ${oldPlan} to ${user.plan} (${user.planType})`, user.email, 'info');
 
     res.json({
       _id: user._id,
@@ -350,11 +517,9 @@ router.post('/announcements', async (req, res) => {
       return res.status(400).json({ message: 'Title and message are required' });
     }
 
-    const User = require('../models/User');
     const Notification = require('../models/Notification');
     const users = await User.find({});
 
-    // Create a notification for each user
     const notifications = users.map(u => ({
       userId: u._id,
       title,
@@ -364,6 +529,8 @@ router.post('/announcements', async (req, res) => {
 
     await Notification.insertMany(notifications);
 
+    await logAuditAction(req, 'ANNOUNCEMENT_BROADCAST', `Broadcasted announcement "${title}" to ${users.length} users`, '', 'info');
+
     res.status(201).json({ message: `Announcement broadcasted successfully to ${users.length} users.` });
   } catch (error) {
     res.status(500).json({ message: 'Server error broadcasting announcement' });
@@ -371,5 +538,3 @@ router.post('/announcements', async (req, res) => {
 });
 
 module.exports = router;
-
-
