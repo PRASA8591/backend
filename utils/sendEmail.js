@@ -1,17 +1,21 @@
 const nodemailer = require('nodemailer');
 
-// Configure Zoho SMTP Transporter with cloud-resilient TLS settings
+// Configure Zoho SMTP Transporter using Port 587 (TLS/STARTTLS) for Render Cloud Compatibility
 const transporter = nodemailer.createTransport({
   host: 'smtp.zoho.com',
-  port: 465, // Use 465 for SSL, or 587 for TLS
-  secure: true, // Must be true for port 465
+  port: 587,
+  secure: false, // Must be false for Port 587 STARTTLS
+  requireTLS: true,
   auth: {
     user: process.env.ZOHO_EMAIL,
     pass: process.env.ZOHO_PASSWORD,
   },
   tls: {
     rejectUnauthorized: false
-  }
+  },
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 15000
 });
 
 // Function to send verification code
