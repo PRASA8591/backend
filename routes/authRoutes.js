@@ -887,5 +887,85 @@ router.post('/reset-password-with-code', async (req, res) => {
   }
 });
 
+// @route   POST /api/auth/reset-account
+// @desc    Reset all financial data, accounts, transactions, and histories for current user
+router.post('/reset-account', protect, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const Account = require('../models/Account');
+    const Transaction = require('../models/Transaction');
+    const ActivityLog = require('../models/ActivityLog');
+    const AuditLog = require('../models/AuditLog');
+    const Notification = require('../models/Notification');
+
+    // Wipe all user data records
+    await Account.deleteMany({ userId });
+    await Transaction.deleteMany({ userId });
+    await ActivityLog.deleteMany({ $or: [{ userId }, { user: userId }] });
+    await AuditLog.deleteMany({ userId });
+    await Notification.deleteMany({ userId });
+
+    // Create a fresh starting default account
+    const defaultAccount = await Account.create({
+      userId,
+      name: 'Main Wallet',
+      initialBalance: 0
+    });
+
+    res.status(200).json({
+      message: 'Account reset successful! All accounts and transaction histories have been wiped.',
+      defaultAccount
+    });
+  } catch (error) {
+    console.error('Reset Account Error:', error);
+    res.status(500).json({ message: 'Failed to reset account data.' });
+  }
+});
+
+// @route   DELETE /api/auth/delete-account
+// @desc    Permanently delete current user account and all associated data
+router.delete('/delete-account', protect, async (req, res) => {
+  const { password } = req.body;
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Require password confirmation for non-Google users
+    if (user.authProvider !== 'google') {
+      if (!password) {
+        return res.status(400).json({ message: 'Password confirmation is required to delete account.' });
+      }
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(401).json({ message: 'Incorrect password. Account deletion canceled.' });
+      }
+    }
+
+    const userId = user._id;
+    const Account = require('../models/Account');
+    const Transaction = require('../models/Transaction');
+    const ActivityLog = require('../models/ActivityLog');
+    const AuditLog = require('../models/AuditLog');
+    const Notification = require('../models/Notification');
+
+    // Wipe all user data
+    await Account.deleteMany({ userId });
+    await Transaction.deleteMany({ userId });
+    await ActivityLog.deleteMany({ $or: [{ userId }, { user: userId }] });
+    await AuditLog.deleteMany({ userId });
+    await Notification.deleteMany({ userId });
+
+    // Permanently remove user record
+    await User.findByIdAndDelete(userId);
+
+    res.status(200).json({ message: 'Your account and all associated data have been permanently deleted.' });
+  } catch (error) {
+    console.error('Delete Account Error:', error);
+    res.status(500).json({ message: 'Failed to delete user account.' });
+  }
+});
+
 module.exports = router;
 
