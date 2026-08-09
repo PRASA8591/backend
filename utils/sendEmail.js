@@ -3,56 +3,70 @@ const nodemailer = require('nodemailer');
 const ZOHO_USER = (process.env.ZOHO_EMAIL || 'noreply@prasatek.lk').trim();
 const ZOHO_PASS = (process.env.ZOHO_PASSWORD || '49GwqcXhPctJ').trim();
 
-// Configure Primary Zoho Transporter (Port 465 SSL)
-const primaryTransporter = nodemailer.createTransport({
+// 1. Zoho Standard SSL (Port 465, IPv4)
+const transporter1 = nodemailer.createTransport({
   host: 'smtp.zoho.com',
   port: 465,
   secure: true,
-  auth: {
-    user: ZOHO_USER,
-    pass: ZOHO_PASS,
-  },
-  tls: {
-    rejectUnauthorized: false
-  },
+  family: 4,
+  auth: { user: ZOHO_USER, pass: ZOHO_PASS },
+  tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' },
   connectionTimeout: 10000,
   greetingTimeout: 10000,
   socketTimeout: 15000
 });
 
-// Configure Fallback Zoho Transporter (Port 587 STARTTLS)
-const fallbackTransporter = nodemailer.createTransport({
+// 2. Zoho Pro SSL (Port 465, IPv4)
+const transporter2 = nodemailer.createTransport({
+  host: 'smtppro.zoho.com',
+  port: 465,
+  secure: true,
+  family: 4,
+  auth: { user: ZOHO_USER, pass: ZOHO_PASS },
+  tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' },
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 15000
+});
+
+// 3. Zoho Standard STARTTLS (Port 587, IPv4)
+const transporter3 = nodemailer.createTransport({
   host: 'smtp.zoho.com',
   port: 587,
   secure: false,
   requireTLS: true,
-  auth: {
-    user: ZOHO_USER,
-    pass: ZOHO_PASS,
-  },
-  tls: {
-    rejectUnauthorized: false
-  },
+  family: 4,
+  auth: { user: ZOHO_USER, pass: ZOHO_PASS },
+  tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2' },
   connectionTimeout: 10000,
   greetingTimeout: 10000,
   socketTimeout: 15000
 });
 
-// Helper function to send email with automatic port fallback
+// Helper function to send email with automatic multi-transporter fallback
 const dispatchMail = async (mailOptions) => {
+  mailOptions.from = `"No-Reply PrasaTek" <${ZOHO_USER}>`;
+
   try {
-    const info = await primaryTransporter.sendMail(mailOptions);
-    console.log(`[SMTP Port 465] Email sent to ${mailOptions.to}. MessageId: ${info.messageId}`);
+    const info = await transporter1.sendMail(mailOptions);
+    console.log(`[SMTP smtp.zoho.com:465] Email sent to ${mailOptions.to}. MessageId: ${info.messageId}`);
     return info;
-  } catch (primaryErr) {
-    console.warn(`[SMTP Port 465 Primary Failed: ${primaryErr.message}]. Retrying with Port 587 STARTTLS...`);
+  } catch (err1) {
+    console.warn(`[SMTP smtp.zoho.com:465 Failed: ${err1.message}]. Retrying with smtppro.zoho.com:465...`);
     try {
-      const info = await fallbackTransporter.sendMail(mailOptions);
-      console.log(`[SMTP Port 587 Fallback] Email sent to ${mailOptions.to}. MessageId: ${info.messageId}`);
+      const info = await transporter2.sendMail(mailOptions);
+      console.log(`[SMTP smtppro.zoho.com:465] Email sent to ${mailOptions.to}. MessageId: ${info.messageId}`);
       return info;
-    } catch (fallbackErr) {
-      console.error(`[SMTP Port 587 Fallback Failed: ${fallbackErr.message}]`);
-      throw fallbackErr;
+    } catch (err2) {
+      console.warn(`[SMTP smtppro.zoho.com:465 Failed: ${err2.message}]. Retrying with smtp.zoho.com:587...`);
+      try {
+        const info = await transporter3.sendMail(mailOptions);
+        console.log(`[SMTP smtp.zoho.com:587] Email sent to ${mailOptions.to}. MessageId: ${info.messageId}`);
+        return info;
+      } catch (err3) {
+        console.error(`[All Zoho SMTP Transporters Failed] Final Error: ${err3.message}`);
+        throw err3;
+      }
     }
   }
 };
