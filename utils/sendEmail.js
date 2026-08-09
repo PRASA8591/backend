@@ -1,6 +1,6 @@
 const nodemailer = require('nodemailer');
 
-// Configure Zoho SMTP Transporter
+// Configure Zoho SMTP Transporter with cloud-resilient TLS settings
 const transporter = nodemailer.createTransport({
   host: 'smtp.zoho.com',
   port: 465, // Use 465 for SSL, or 587 for TLS
@@ -9,10 +9,18 @@ const transporter = nodemailer.createTransport({
     user: process.env.ZOHO_EMAIL,
     pass: process.env.ZOHO_PASSWORD,
   },
+  tls: {
+    rejectUnauthorized: false
+  }
 });
 
 // Function to send verification code
 const sendVerificationCode = async (toEmail, verificationCode) => {
+  if (!process.env.ZOHO_EMAIL || !process.env.ZOHO_PASSWORD) {
+    console.error('SMTP Config Error: ZOHO_EMAIL or ZOHO_PASSWORD environment variable is missing.');
+    throw new Error('Email service configuration is missing on server.');
+  }
+
   const mailOptions = {
     from: `"No-Reply PrasaTek" <${process.env.ZOHO_EMAIL}>`,
     to: toEmail,
@@ -61,7 +69,14 @@ const sendVerificationCode = async (toEmail, verificationCode) => {
     `,
   };
 
-  await transporter.sendMail(mailOptions);
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`Verification email sent to ${toEmail}. MessageId: ${info.messageId}`);
+    return info;
+  } catch (error) {
+    console.error(`Failed to send verification email to ${toEmail}:`, error.message);
+    throw error;
+  }
 };
 
 module.exports = sendVerificationCode;
