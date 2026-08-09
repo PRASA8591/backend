@@ -50,6 +50,48 @@ router.post('/', protect, async (req, res) => {
   }
 });
 
+// @route   PUT /api/transactions/:id
+// @desc    Update an existing transaction (Enterprise Plan feature)
+router.put('/:id', protect, async (req, res) => {
+  // Enforce Enterprise plan or Admin/Manager role requirement
+  if (req.user.plan !== 'enterprise' && req.user.role !== 'admin' && req.user.role !== 'manager') {
+    return res.status(403).json({
+      message: 'Editing past transactions is an exclusive feature of the Enterprise plan. Please upgrade your plan to unlock this feature.'
+    });
+  }
+
+  const { accountId, date, type, category, description, amount } = req.body;
+
+  try {
+    const transaction = await Transaction.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!transaction) {
+      return res.status(404).json({ message: 'Transaction not found or unauthorized' });
+    }
+
+    if (accountId) {
+      const account = await Account.findOne({ _id: accountId, userId: req.user._id });
+      if (!account) {
+        return res.status(404).json({ message: 'Associated account not found or unauthorized' });
+      }
+      transaction.accountId = accountId;
+    }
+
+    if (date) {
+      transaction.date = date;
+      transaction.month = date.slice(0, 7);
+    }
+    if (type) transaction.type = type;
+    if (category) transaction.category = category;
+    if (description !== undefined) transaction.description = description;
+    if (amount !== undefined) transaction.amount = Number(amount);
+
+    const updatedTransaction = await transaction.save();
+    res.json(updatedTransaction);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error updating transaction' });
+  }
+});
+
 // @route   DELETE /api/transactions/:id
 // @desc    Delete a transaction
 router.delete('/:id', protect, async (req, res) => {

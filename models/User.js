@@ -80,6 +80,35 @@ const UserSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  savingsGoalName: {
+    type: String,
+    default: ''
+  },
+  savingsGoalTarget: {
+    type: Number,
+    default: 0
+  },
+  savingsGoalDeadline: {
+    type: Date,
+    default: null
+  },
+  isVerified: {
+    type: Boolean,
+    default: false
+  },
+  verificationCode: {
+    type: String,
+    default: null
+  },
+  codeExpiresAt: {
+    type: Date,
+    default: null
+  },
+  authProvider: {
+    type: String,
+    enum: ['local', 'google'],
+    default: 'local'
+  },
   lastLoginAt: {
     type: Date,
     default: Date.now

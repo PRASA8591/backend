@@ -187,7 +187,7 @@ router.delete('/users/:id', async (req, res) => {
     }
 
     // Protect Master Admin from deletion
-    if (user.email.toLowerCase() === 'admin@prasatek.site') {
+    if (['admin@prasatek.site', 'admin@prasatek.lk'].includes(user.email.toLowerCase())) {
       return res.status(400).json({ message: 'Master System Admin cannot be deleted' });
     }
 

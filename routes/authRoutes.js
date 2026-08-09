@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware');
+const sendVerificationCode = require('../utils/sendEmail');
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -16,7 +17,7 @@ const generateToken = (id) => {
 };
 
 // @route   POST /api/auth/register
-// @desc    Register a new user
+// @desc    Register a new user and send verification OTP
 router.post('/register', async (req, res) => {
   const { name, email, password, mobile } = req.body;
 
@@ -25,7 +26,7 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ message: 'Please fill in name, email, and password' });
     }
 
-    const userExists = await User.findOne({ email });
+    const userExists = await User.findOne({ email: email.toLowerCase() });
     if (userExists) {
       return res.status(400).json({ message: 'User already exists' });
     }
@@ -34,8 +35,11 @@ router.post('/register', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    let role = 'user';
+    // Generate 6-digit OTP code
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
 
+    let role = 'user';
 
     const user = await User.create({
       name,
@@ -45,17 +49,110 @@ router.post('/register', async (req, res) => {
       role,
       plan: 'free',
       planType: 'none',
-      planStatus: 'active'
+      planStatus: 'active',
+      isVerified: false,
+      verificationCode: otp,
+      codeExpiresAt: otpExpires,
+      authProvider: 'local'
     });
 
-    const userObj = user.toObject();
-    delete userObj.password;
+    // Dispatch email via Zoho SMTP
+    try {
+      await sendVerificationCode(user.email, otp);
+    } catch (emailError) {
+      console.error('Failed to send verification email on register:', emailError);
+    }
+
     res.status(201).json({
-      ...userObj,
-      token: generateToken(user._id)
+      message: 'Registration successful! Verification code sent to your email.',
+      email: user.email,
+      requiresVerification: true,
+      isVerified: false
     });
   } catch (error) {
+    console.error('Registration error:', error);
     res.status(500).json({ message: 'Server error during registration' });
+  }
+});
+
+// @route   POST /api/auth/verify
+// @desc    Verify user email with OTP code
+router.post('/verify', async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    if (!email || !code) {
+      return res.status(400).json({ message: 'Email and verification code are required' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+
+    if (user.isVerified) {
+      const userObj = user.toObject();
+      delete userObj.password;
+      return res.status(200).json({
+        message: 'Email verified successfully!',
+        ...userObj,
+        token: generateToken(user._id)
+      });
+    }
+
+    // Validate OTP correctness and expiration time
+    if (user.verificationCode === code.toString().trim() && user.codeExpiresAt && user.codeExpiresAt > Date.now()) {
+      user.isVerified = true;
+      user.verificationCode = undefined;
+      user.codeExpiresAt = undefined;
+      await user.save();
+
+      const userObj = user.toObject();
+      delete userObj.password;
+
+      return res.status(200).json({
+        message: 'Email verified successfully!',
+        ...userObj,
+        token: generateToken(user._id)
+      });
+    } else {
+      return res.status(400).json({ message: 'Invalid or expired verification code.' });
+    }
+  } catch (error) {
+    console.error('Email verification error:', error);
+    return res.status(500).json({ message: 'Internal server error.', error: error.message });
+  }
+});
+
+// @route   POST /api/auth/resend-verification
+// @desc    Resend OTP verification code
+router.post('/resend-verification', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+
+    if (user.isVerified) {
+      return res.status(400).json({ message: 'Email is already verified.' });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    user.verificationCode = otp;
+    user.codeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await user.save();
+
+    await sendVerificationCode(user.email, otp);
+
+    return res.status(200).json({ message: 'A new verification code has been sent to your email.' });
+  } catch (error) {
+    console.error('Resend verification code error:', error);
+    return res.status(500).json({ message: 'Failed to send verification code.', error: error.message });
   }
 });
 
@@ -196,7 +293,9 @@ router.post('/google', async (req, res) => {
         org: 'default',
         plan: 'free',
         planType: 'none',
-        planStatus: 'active'
+        planStatus: 'active',
+        isVerified: false,
+        authProvider: 'google'
       });
     }
 
@@ -265,12 +364,22 @@ router.put('/settings', protect, async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    if (theme) user.theme = theme;
+    if (theme) {
+      if (theme === 'forest' && !['pro', 'enterprise'].includes(user.plan)) {
+        return res.status(403).json({ message: 'Forest Emerald theme is a Pro / Enterprise feature. Please upgrade.' });
+      }
+      if (['nordic', 'cyberpunk'].includes(theme) && user.plan !== 'enterprise') {
+        return res.status(403).json({ message: 'Nordic Frost and Cyberpunk themes are Enterprise features. Please upgrade.' });
+      }
+      user.theme = theme;
+    }
     if (currency) user.currency = currency;
     if (notificationsEnabled !== undefined) user.notificationsEnabled = notificationsEnabled;
 
     const updatedUser = await user.save();
-    res.json(updatedUser);
+    const userObj = updatedUser.toObject();
+    delete userObj.password;
+    res.json(userObj);
   } catch (error) {
     res.status(500).json({ message: 'Server error updating settings' });
   }
@@ -319,12 +428,12 @@ router.put('/plan', protect, async (req, res) => {
     // Create a subscription log
     const Subscription = require('../models/Subscription');
     
-    // Pricing details: Pro (199 / 1999), Enterprise (499 / 4999), Free (0)
+    // Pricing details: Pro (199 / 1900), Enterprise (499 / 4900), Free (0)
     let amount = 0;
     if (plan === 'pro') {
-      amount = user.planType === 'yearly' ? 1999 : 199;
+      amount = user.planType === 'yearly' ? 1900 : 199;
     } else if (plan === 'enterprise') {
-      amount = user.planType === 'yearly' ? 4999 : 499;
+      amount = user.planType === 'yearly' ? 4900 : 499;
     }
 
     await Subscription.create({
@@ -359,12 +468,12 @@ router.post('/payhere-hash', protect, async (req, res) => {
     const merchantSecret = process.env.PAYHERE_MERCHANT_SECRET || 'MTkzODQyMTk5NTM5NzYyMTA2OTgyOTYwODk0NjI4MjE1ODc0NzY4MA==';
     const isSandbox = process.env.PAYHERE_SANDBOX !== 'false';
 
-    // Pricing details: Pro (199 / 1999), Enterprise (499 / 4999)
+    // Pricing details: Pro (199 / 1900), Enterprise (499 / 4900)
     let amount = 0;
     if (plan === 'pro') {
-      amount = billingCycle === 'yearly' ? 1999 : 199;
+      amount = billingCycle === 'yearly' ? 1900 : 199;
     } else if (plan === 'enterprise') {
-      amount = billingCycle === 'yearly' ? 4999 : 499;
+      amount = billingCycle === 'yearly' ? 4900 : 499;
     }
 
     const orderId = `order_USR_${req.user._id}_PLAN_${plan}_CYCLE_${billingCycle}_TIME_${Date.now()}`;
@@ -465,9 +574,9 @@ router.post('/payhere-success', protect, async (req, res) => {
       const Subscription = require('../models/Subscription');
       let amount = 0;
       if (plan === 'pro') {
-        amount = billingCycle === 'yearly' ? 1999 : 199;
+        amount = billingCycle === 'yearly' ? 1900 : 199;
       } else if (plan === 'enterprise') {
-        amount = billingCycle === 'yearly' ? 4999 : 499;
+        amount = billingCycle === 'yearly' ? 4900 : 499;
       }
 
       await Subscription.create({
@@ -500,10 +609,13 @@ router.post('/payhere-notify', async (req, res) => {
   try {
     const merchantSecret = process.env.PAYHERE_MERCHANT_SECRET || 'MTkzODQyMTk5NTM5NzYyMTA2OTgyOTYwODk0NjI4MjE1ODc0NzY4MA==';
     const hashedSecret = crypto.createHash('md5').update(merchantSecret).digest('hex').toUpperCase();
-    const dataToHash = merchant_id + order_id + payhere_amount + payhere_currency + status_code + hashedSecret;
-    const localSig = crypto.createHash('md5').update(dataToHash).digest('hex').toUpperCase();
+    const formattedAmount = parseFloat(payhere_amount).toFixed(2);
+    const dataToHash1 = merchant_id + order_id + formattedAmount + payhere_currency + status_code + hashedSecret;
+    const dataToHash2 = merchant_id + order_id + payhere_amount + payhere_currency + status_code + hashedSecret;
+    const localSig1 = crypto.createHash('md5').update(dataToHash1).digest('hex').toUpperCase();
+    const localSig2 = crypto.createHash('md5').update(dataToHash2).digest('hex').toUpperCase();
 
-    if (localSig !== md5sig) {
+    if (localSig1 !== md5sig && localSig2 !== md5sig) {
       console.error('PayHere Webhook validation failed: signature mismatch');
       return res.status(400).send('Invalid signature');
     }
@@ -567,6 +679,32 @@ router.post('/payhere-notify', async (req, res) => {
   } catch (error) {
     console.error('PayHere Webhook error:', error);
     res.status(500).send('Server error');
+  }
+});
+
+// @route   PUT /api/auth/savings-goal
+// @desc    Update financial savings goal (Enterprise feature)
+router.put('/savings-goal', protect, async (req, res) => {
+  const { name, target, deadline } = req.body;
+  try {
+    if (req.user.plan !== 'enterprise') {
+      return res.status(403).json({ message: 'Savings Goal tracking is an Enterprise feature. Please upgrade.' });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    user.savingsGoalName = name || '';
+    user.savingsGoalTarget = target !== undefined ? Number(target) : 0;
+    user.savingsGoalDeadline = deadline || null;
+
+    const updatedUser = await user.save();
+
+    const userObj = updatedUser.toObject();
+    delete userObj.password;
+    res.json(userObj);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error updating savings goal' });
   }
 });
 
