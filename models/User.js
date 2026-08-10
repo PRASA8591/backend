@@ -63,6 +63,44 @@ const UserSchema = new mongoose.Schema({
     type: Date,
     default: () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // Default 30 days
   },
+  pendingPlan: {
+    type: String,
+    enum: ['none', 'pro', 'enterprise'],
+    default: 'none'
+  },
+  planExpiresAt: {
+    type: Date,
+    default: null
+  },
+  expiryWarningSent: {
+    type: Boolean,
+    default: false
+  },
+  smsSyncEnabled: {
+    type: Boolean,
+    default: false
+  },
+  linkedBankSenders: {
+    type: [String],
+    default: []
+  },
+  twoFactorEnabled: {
+    type: Boolean,
+    default: false
+  },
+  twoFactorSecret: {
+    type: String,
+    default: ''
+  },
+  sessions: [
+    {
+      sessionId: String,
+      device: String,
+      ip: String,
+      createdAt: { type: Date, default: Date.now },
+      lastActive: { type: Date, default: Date.now }
+    }
+  ],
   profilePhoto: {
     type: String,
     default: ''

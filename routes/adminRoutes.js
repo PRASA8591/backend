@@ -36,7 +36,7 @@ router.get('/system-health', async (req, res) => {
   try {
     const memoryUsage = process.memoryUsage();
     const uptimeSeconds = process.uptime();
-    
+
     // DB ping check
     const dbState = mongoose.connection.readyState;
     const dbStateLabels = ['Disconnected', 'Connected', 'Connecting', 'Disconnecting'];
@@ -75,7 +75,7 @@ router.get('/system-settings', async (req, res) => {
     const banner = await SystemSetting.findOne({ key: 'global_banner' });
     const hqAddress = await SystemSetting.findOne({ key: 'hq_address' });
     const hqMapUrl = await SystemSetting.findOne({ key: 'hq_map_url' });
-    
+
     res.json({
       maintenanceMode: maintenance ? maintenance.value : false,
       globalBanner: banner ? banner.value : { enabled: false, message: '', type: 'info' },
@@ -159,7 +159,7 @@ router.get('/stats', async (req, res) => {
     const totalUsers = await User.countDocuments({});
     const privilegedUsers = await User.countDocuments({ role: { $in: ['admin', 'manager'] } });
     const suspendedUsers = await User.countDocuments({ status: 'suspended' });
-    
+
     const uniqueOrgs = await User.distinct('org');
     const totalOrgs = Math.max(uniqueOrgs.length, 1);
 
@@ -197,7 +197,7 @@ router.post('/users', async (req, res) => {
 
     const emailPrefix = email.split('@')[0];
     const finalName = name || (emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1));
-    
+
     const userExists = await User.findOne({ email: email.toLowerCase() });
     if (userExists) {
       return res.status(400).json({ message: 'User with this email already exists' });
@@ -488,10 +488,10 @@ router.post('/users/:id/import-backup', async (req, res) => {
     }
 
     await logAuditAction(
-      req, 
-      'BACKUP_IMPORT', 
-      `Imported JSON backup for user ${user.email}: ${createdAccountsCount} accounts, ${createdTransactionsCount} transactions created`, 
-      user.email, 
+      req,
+      'BACKUP_IMPORT',
+      `Imported JSON backup for user ${user.email}: ${createdAccountsCount} accounts, ${createdTransactionsCount} transactions created`,
+      user.email,
       'warning'
     );
 
@@ -651,7 +651,7 @@ router.put('/users/:id/plan', async (req, res) => {
     const oldPlan = user.plan;
     if (plan) user.plan = plan;
     if (planType) user.planType = planType;
-    
+
     if (plan && plan !== 'free') {
       user.planStatus = 'active';
       const durationDays = planType === 'yearly' ? 365 : 30;
@@ -757,4 +757,166 @@ router.delete('/announcements/:id', async (req, res) => {
   }
 });
 
+// @route   GET /api/admin/payments/pending
+// @desc    List all pending bank payment orders for Admin verification
+router.get('/payments/pending', async (req, res) => {
+  try {
+    const PaymentOrder = require('../models/PaymentOrder');
+    const orders = await PaymentOrder.find({ status: 'pending' })
+      .populate('userId', 'name email mobile plan pendingPlan')
+      .sort({ createdAt: -1 });
+
+    res.json(orders);
+  } catch (error) {
+    console.error('Fetch Pending Payments Error:', error);
+    res.status(500).json({ message: 'Server error fetching pending payment orders' });
+  }
+});
+
+// @route   GET /api/admin/payments/all
+// @desc    List all payment orders (pending, approved, rejected)
+router.get('/payments/all', async (req, res) => {
+  try {
+    const PaymentOrder = require('../models/PaymentOrder');
+    const orders = await PaymentOrder.find({})
+      .populate('userId', 'name email mobile plan pendingPlan')
+      .sort({ createdAt: -1 });
+
+    res.json(orders);
+  } catch (error) {
+    console.error('Fetch All Payments Error:', error);
+    res.status(500).json({ message: 'Server error fetching payment orders' });
+  }
+});
+
+// @route   PUT /api/admin/payments/:id/approve
+// @desc    Approve bank payment order, activate user plan, send confirmation email + SMS
+router.put('/payments/:id/approve', async (req, res) => {
+  try {
+    const PaymentOrder = require('../models/PaymentOrder');
+    const { sendEmail } = require('../utils/sendEmail');
+    const { sendSms } = require('../services/smsGateway');
+
+    const order = await PaymentOrder.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ message: 'Payment order not found' });
+    }
+
+    const targetUser = await User.findById(order.userId);
+    if (!targetUser) {
+      return res.status(404).json({ message: 'Associated user account not found' });
+    }
+
+    // Calculate expiry date based on billing cycle (1 month or 1 year)
+    const now = new Date();
+    const durationDays = order.billingCycle === 'yearly' ? 365 : 30;
+    const planExpiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
+
+    // Update order status
+    order.status = 'approved';
+    order.approvedAt = now;
+    order.adminNotes = req.body.adminNotes || 'Payment verified and approved by Admin.';
+    await order.save();
+
+    // Update User plan & status
+    targetUser.plan = order.plan;
+    targetUser.planType = order.billingCycle;
+    targetUser.planStatus = 'active';
+    targetUser.pendingPlan = 'none';
+    targetUser.planStartDate = now;
+    targetUser.planExpiresAt = planExpiresAt;
+    targetUser.expiryWarningSent = false;
+    await targetUser.save();
+
+    await logAuditAction(req, 'PAYMENT_APPROVED', `Approved payment order ${order.orderId} for ${targetUser.email}. Upgraded to ${order.plan.toUpperCase()}.`, targetUser.email, 'info');
+
+    // Dispatch confirmation email
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
+        <h2 style="color: #0b8c5a; margin-top: 0;">Payment Approved & Plan Activated 🎉</h2>
+        <p>Dear <strong>${targetUser.name}</strong>,</p>
+        <p>Your payment order <strong>${order.orderId}</strong> of <strong>LKR ${order.amount.toLocaleString()}</strong> has been verified and approved.</p>
+        <p>Your account is now upgraded to <strong>${order.plan.toUpperCase()}</strong> (${order.billingCycle}) active until <strong>${planExpiresAt.toLocaleDateString()}</strong>.</p>
+        <p style="margin-top: 20px;"><a href="https://cash.prasatek.lk/dashboard" style="background-color: #0b8c5a; color: white; padding: 10px 18px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Go to Dashboard</a></p>
+        <p style="color: #64748b; font-size: 12px; margin-top: 24px;">© PrasaTek System Solutions</p>
+      </div>
+    `;
+
+    try {
+      await sendEmail(targetUser.email, '🎉 Payment Approved - ExpenseTracker Pro Activated', emailHtml);
+      await sendSms(targetUser.mobile, `ExpenseTracker Pro: Your payment ${order.orderId} is approved! Your ${order.plan.toUpperCase()} plan is now active.`);
+    } catch (mailErr) {
+      console.warn('Failed sending approval notification email:', mailErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: `Payment order ${order.orderId} approved successfully! User plan updated to ${order.plan}.`,
+      order
+    });
+  } catch (error) {
+    console.error('Approve Payment Error:', error);
+    res.status(500).json({ message: 'Server error approving payment order' });
+  }
+});
+
+// @route   PUT /api/admin/payments/:id/reject
+// @desc    Reject bank payment order with reasoning note
+router.put('/payments/:id/reject', async (req, res) => {
+  try {
+    const PaymentOrder = require('../models/PaymentOrder');
+    const { sendEmail } = require('../utils/sendEmail');
+    const { sendSms } = require('../services/smsGateway');
+
+    const { adminNotes = 'Payment proof could not be verified.' } = req.body;
+
+    const order = await PaymentOrder.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ message: 'Payment order not found' });
+    }
+
+    const targetUser = await User.findById(order.userId);
+
+    order.status = 'rejected';
+    order.adminNotes = adminNotes;
+    await order.save();
+
+    if (targetUser) {
+      targetUser.pendingPlan = 'none';
+      await targetUser.save();
+
+      await logAuditAction(req, 'PAYMENT_REJECTED', `Rejected payment order ${order.orderId} for ${targetUser.email}. Reason: ${adminNotes}`, targetUser.email, 'warning');
+
+      const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
+          <h2 style="color: #dc2626; margin-top: 0;">Payment Slip Update ❌</h2>
+          <p>Dear <strong>${targetUser.name}</strong>,</p>
+          <p>Your payment order <strong>${order.orderId}</strong> could not be verified.</p>
+          <p><strong>Reason:</strong> ${adminNotes}</p>
+          <p>Please re-check your payment slip details or re-upload a clear receipt from your upgrade page.</p>
+          <p style="margin-top: 20px;"><a href="https://prasatek.lk/upgrade" style="background-color: #0b8c5a; color: white; padding: 10px 18px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Re-upload Payment Proof</a></p>
+          <p style="color: #64748b; font-size: 12px; margin-top: 24px;">© PrasaTek System Solutions</p>
+        </div>
+      `;
+
+      try {
+        await sendEmail(targetUser.email, 'Update on your ExpenseTracker Pro Payment', emailHtml);
+        await sendSms(targetUser.mobile, `ExpenseTracker Pro: Payment ${order.orderId} rejected. Reason: ${adminNotes}. Re-upload at prasatek.lk`);
+      } catch (mailErr) {
+        console.warn('Failed sending rejection email:', mailErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Payment order ${order.orderId} rejected.`,
+      order
+    });
+  } catch (error) {
+    console.error('Reject Payment Error:', error);
+    res.status(500).json({ message: 'Server error rejecting payment order' });
+  }
+});
+
 module.exports = router;
+

@@ -36,6 +36,19 @@ const TransactionSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  source: {
+    type: String,
+    enum: ['manual', 'sms_auto', 'csv_import'],
+    default: 'manual'
+  },
+  rawSms: {
+    type: String,
+    default: ''
+  },
+  merchant: {
+    type: String,
+    default: ''
+  },
   timestamp: {
     type: Number,
     default: Date.now

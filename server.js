@@ -3,6 +3,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 
+const path = require('path');
 const authRoutes = require('./routes/authRoutes');
 const accountRoutes = require('./routes/accountRoutes');
 const transactionRoutes = require('./routes/transactionRoutes');
@@ -10,6 +11,8 @@ const adminRoutes = require('./routes/adminRoutes');
 const contactRoutes = require('./routes/contactRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const systemRoutes = require('./routes/systemRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
+const { initCronScheduler } = require('./services/cronScheduler');
 
 const app = express();
 
@@ -23,6 +26,7 @@ app.use(cors({
 app.options('*', cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
 app.use('/api/system', systemRoutes);
@@ -32,6 +36,7 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/payments', paymentRoutes);
 
 // Health check endpoint
 app.get('/', (req, res) => {
@@ -57,6 +62,7 @@ if (!MONGO_URI) {
   mongoose.connect(MONGO_URI)
     .then(async () => {
       console.log('MongoDB connected successfully.');
+      initCronScheduler();
 
       const cron = require('node-cron');
       const User = require('./models/User');
