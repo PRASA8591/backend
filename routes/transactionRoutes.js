@@ -108,16 +108,44 @@ router.delete('/:id', protect, async (req, res) => {
   }
 });
 
+const { parseBankSms } = require('../services/smsParser');
+
+// @route   POST /api/transactions/preview-sms
+// @desc    Preview parsed data from a Bank SMS without logging
+router.post('/preview-sms', protect, async (req, res) => {
+  try {
+    const { smsText } = req.body;
+    if (!smsText || typeof smsText !== 'string') {
+      return res.status(400).json({ message: 'Valid smsText string is required' });
+    }
+
+    const parsed = parseBankSms(smsText);
+    if (!parsed) {
+      return res.status(400).json({ message: 'Could not detect valid transaction amount from SMS.' });
+    }
+
+    res.json({ success: true, parsed });
+  } catch (error) {
+    console.error('Preview SMS Error:', error);
+    res.status(500).json({ message: 'Server error previewing SMS' });
+  }
+});
+
 // @route   POST /api/transactions/parse-sms
 // @desc    Parse Bank SMS and automatically log transaction
 router.post('/parse-sms', protect, async (req, res) => {
   try {
-    const { smsText, accountId } = req.body;
+    const { smsText, accountId, customCategory, customDescription } = req.body;
     if (!smsText) {
       return res.status(400).json({ message: 'smsText is required' });
     }
 
-    // Determine associated account (use specified accountId or first account of user)
+    const parsed = parseBankSms(smsText);
+    if (!parsed) {
+      return res.status(400).json({ message: 'Could not extract valid transaction amount from SMS text.' });
+    }
+
+    // Determine target account
     let targetAccount;
     if (accountId) {
       targetAccount = await Account.findOne({ _id: accountId, userId: req.user._id });
@@ -129,64 +157,22 @@ router.post('/parse-sms', protect, async (req, res) => {
       return res.status(404).json({ message: 'No active account found to log transaction against.' });
     }
 
-    // Smart regex parsing for amount & transaction type
-    const lowerSms = smsText.toLowerCase();
-    
-    // Amount extraction regex (e.g. LKR 2,500.00, Rs. 1500, USD 45.00, 2500 LKR)
-    const amountMatch = smsText.match(/(?:LKR|RS\.?|USD|\$)\s*([\d,]+(?:\.\d{2})?)|([\d,]+(?:\.\d{2})?)\s*(?:LKR|RS\.?)/i);
-    let amount = 0;
-    if (amountMatch) {
-      const rawNum = (amountMatch[1] || amountMatch[2]).replace(/,/g, '');
-      amount = parseFloat(rawNum);
-    }
-
-    if (!amount || isNaN(amount)) {
-      return res.status(400).json({ message: 'Could not extract valid transaction amount from SMS text.' });
-    }
-
-    // Determine type: credit/deposit/received = add, debit/paid/purchased/withdrawn = deduct
-    let type = 'deduct';
-    if (lowerSms.includes('credited') || lowerSms.includes('received') || lowerSms.includes('deposit') || lowerSms.includes('added')) {
-      type = 'add';
-    }
-
-    // Merchant extraction
-    let merchant = 'Bank Transaction';
-    const atMatch = smsText.match(/(?:at|to|from|via)\s+([A-Za-z0-9\s&'-]+?)(?:\.\s|\son\s|\sfor\s|\sat\s|\sRef|$)/i);
-    if (atMatch && atMatch[1]) {
-      merchant = atMatch[1].trim();
-    }
-
-    // Category prediction based on merchant & text keywords
-    let category = 'General';
-    const combinedText = (merchant + ' ' + smsText).toLowerCase();
-    if (combinedText.includes('food') || combinedText.includes('restaurant') || combinedText.includes('keells') || combinedText.includes('cargills') || combinedText.includes('kfc') || combinedText.includes('pizza')) {
-      category = 'Food & Dining';
-    } else if (combinedText.includes('fuel') || combinedText.includes('petrol') || combinedText.includes('uber') || combinedText.includes('pickme') || combinedText.includes('transport')) {
-      category = 'Transport';
-    } else if (combinedText.includes('ceb') || combinedText.includes('water') || combinedText.includes('slt') || combinedText.includes('dialog') || combinedText.includes('bill')) {
-      category = 'Bills & Utilities';
-    } else if (combinedText.includes('daraz') || combinedText.includes('fashion') || combinedText.includes('cloth') || combinedText.includes('store')) {
-      category = 'Shopping';
-    } else if (type === 'add') {
-      category = 'Salary / Income';
-    }
-
-    const todayStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-    const monthStr = todayStr.slice(0, 7);
+    const category = customCategory || parsed.category;
+    const description = customDescription || parsed.description;
+    const monthStr = parsed.date.slice(0, 7);
 
     const newTransaction = await Transaction.create({
       userId: req.user._id,
       accountId: targetAccount._id,
-      date: todayStr,
+      date: parsed.date,
       month: monthStr,
-      type,
+      type: parsed.type,
       category,
-      description: `[SMS Auto] ${merchant}`,
-      amount,
+      description,
+      amount: parsed.amount,
       source: 'sms_auto',
       rawSms: smsText,
-      merchant
+      merchant: parsed.merchant
     });
 
     res.status(201).json({
