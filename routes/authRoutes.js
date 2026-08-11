@@ -283,22 +283,43 @@ router.put('/budget', protect, async (req, res) => {
 });
 
 // @route   POST /api/auth/google
-// @desc    Authenticate with Google
-router.post('/google', async (req, res) => {
-  const { credential, accessToken } = req.body;
+// @route   POST /api/auth/google-native
+// @desc    Authenticate with Google (Web and Native Android)
+const handleGoogleAuth = async (req, res) => {
+  const { credential, idToken, accessToken } = req.body;
+  const tokenToVerify = credential || idToken;
 
   try {
     let email, name, picture;
 
-    if (credential) {
-      const ticket = await client.verifyIdToken({
-        idToken: credential,
-        audience: process.env.GOOGLE_CLIENT_ID
-      });
-      const payload = ticket.getPayload();
-      email = payload.email;
-      name = payload.name;
-      picture = payload.picture;
+    if (tokenToVerify) {
+      try {
+        const ticket = await client.verifyIdToken({
+          idToken: tokenToVerify,
+          audience: process.env.GOOGLE_CLIENT_ID
+        });
+        const payload = ticket.getPayload();
+        email = payload.email;
+        name = payload.name;
+        picture = payload.picture;
+      } catch (verifyErr) {
+        // Fallback to Google userinfo endpoint if direct audience verification throws
+        if (accessToken) {
+          const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { Authorization: `Bearer ${accessToken}` }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            email = data.email;
+            name = data.name;
+            picture = data.picture;
+          } else {
+            throw verifyErr;
+          }
+        } else {
+          throw verifyErr;
+        }
+      }
     } else if (accessToken) {
       const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
         headers: { Authorization: `Bearer ${accessToken}` }
@@ -383,7 +404,10 @@ router.post('/google', async (req, res) => {
     console.error('Google Auth Error:', error);
     res.status(401).json({ message: 'Google authentication failed' });
   }
-});
+};
+
+router.post('/google', handleGoogleAuth);
+router.post('/google-native', handleGoogleAuth);
 
 // @route   PUT /api/auth/profile
 // @desc    Update profile info (name, photo)
