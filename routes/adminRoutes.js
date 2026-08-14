@@ -68,19 +68,27 @@ router.get('/audit-logs', async (req, res) => {
 });
 
 // @route   GET /api/admin/system-settings
-// @desc    Get system settings (maintenance mode, announcement banner, HQ location map)
+// @desc    Get system settings (maintenance mode, announcement banner, HQ location map, contact info)
 router.get('/system-settings', async (req, res) => {
   try {
     const maintenance = await SystemSetting.findOne({ key: 'maintenance_mode' });
     const banner = await SystemSetting.findOne({ key: 'global_banner' });
     const hqAddress = await SystemSetting.findOne({ key: 'hq_address' });
     const hqMapUrl = await SystemSetting.findOne({ key: 'hq_map_url' });
+    const companyName = await SystemSetting.findOne({ key: 'company_name' });
+    const contactWebsite = await SystemSetting.findOne({ key: 'contact_website' });
+    const contactEmail = await SystemSetting.findOne({ key: 'contact_email' });
+    const contactPhone = await SystemSetting.findOne({ key: 'contact_phone' });
 
     res.json({
       maintenanceMode: maintenance ? maintenance.value : false,
       globalBanner: banner ? banner.value : { enabled: false, message: '', type: 'info' },
       hqAddress: hqAddress ? hqAddress.value : 'Kottawa Road, Colombo District, Sri Lanka',
-      hqMapUrl: hqMapUrl ? hqMapUrl.value : 'https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3961.385418197779!2d79.9610!3d6.8440!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3ae2501a3512e02d%3A0x6b4f738e4a9e5251!2sKottawa%2C%20Pannipitiya!5e0!3m2!1sen!2slk!4v1700000000000!5m2!1sen!2slk'
+      hqMapUrl: hqMapUrl ? hqMapUrl.value : 'https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3961.385418197779!2d79.9610!3d6.8440!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3ae2501a3512e02d%3A0x6b4f738e4a9e5251!2sKottawa%2C%20Pannipitiya!5e0!3m2!1sen!2slk!4v1700000000000!5m2!1sen!2slk',
+      companyName: companyName ? companyName.value : 'PRASATEK SYSTEM SOLUTIONS',
+      contactWebsite: contactWebsite ? contactWebsite.value : 'www.prasatek.lk',
+      contactEmail: contactEmail ? contactEmail.value : 'info@prasatek.lk',
+      contactPhone: contactPhone ? contactPhone.value : '0719323239'
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error retrieving system settings' });
@@ -88,9 +96,9 @@ router.get('/system-settings', async (req, res) => {
 });
 
 // @route   POST /api/admin/system-settings
-// @desc    Update system settings (maintenance mode, global banner, HQ location map)
+// @desc    Update system settings (maintenance mode, global banner, HQ location map, contact info)
 router.post('/system-settings', async (req, res) => {
-  const { maintenanceMode, globalBanner, hqAddress, hqMapUrl } = req.body;
+  const { maintenanceMode, globalBanner, hqAddress, hqMapUrl, companyName, contactWebsite, contactEmail, contactPhone } = req.body;
   try {
     if (typeof maintenanceMode !== 'undefined') {
       await SystemSetting.findOneAndUpdate(
@@ -133,6 +141,38 @@ router.post('/system-settings', async (req, res) => {
         { upsert: true }
       );
       await logAuditAction(req, 'HQ_LOCATION_UPDATE', `Updated Headquarters Location map link`, '', 'info');
+    }
+
+    if (typeof companyName !== 'undefined') {
+      await SystemSetting.findOneAndUpdate(
+        { key: 'company_name' },
+        { value: companyName.trim(), updatedAt: new Date() },
+        { upsert: true }
+      );
+    }
+
+    if (typeof contactWebsite !== 'undefined') {
+      await SystemSetting.findOneAndUpdate(
+        { key: 'contact_website' },
+        { value: contactWebsite.trim(), updatedAt: new Date() },
+        { upsert: true }
+      );
+    }
+
+    if (typeof contactEmail !== 'undefined') {
+      await SystemSetting.findOneAndUpdate(
+        { key: 'contact_email' },
+        { value: contactEmail.trim(), updatedAt: new Date() },
+        { upsert: true }
+      );
+    }
+
+    if (typeof contactPhone !== 'undefined') {
+      await SystemSetting.findOneAndUpdate(
+        { key: 'contact_phone' },
+        { value: contactPhone.trim(), updatedAt: new Date() },
+        { upsert: true }
+      );
     }
 
     res.json({ message: 'System settings updated successfully' });
