@@ -892,12 +892,13 @@ router.put('/payments/:id/approve', async (req, res) => {
       </div>
     `;
 
-    try {
-      await sendEmail(targetUser.email, '🎉 Payment Approved - ExpenseTracker Pro Activated', emailHtml);
-      await sendSms(targetUser.mobile, `ExpenseTracker Pro: Your payment ${order.orderId} is approved! Your ${order.plan.toUpperCase()} plan is now active.`);
-    } catch (mailErr) {
-      console.warn('Failed sending approval notification email:', mailErr.message);
-    }
+    // Dispatch confirmation email & SMS in background (non-blocking for instant UI response)
+    Promise.all([
+      sendEmail(targetUser.email, '🎉 Payment Approved - ExpenseTracker Pro Activated', emailHtml),
+      sendSms(targetUser.mobile, `ExpenseTracker Pro: Your payment ${order.orderId} is approved! Your ${order.plan.toUpperCase()} plan is now active.`)
+    ]).catch((mailErr) => {
+      console.warn('Background approval notification notice:', mailErr.message);
+    });
 
     res.json({
       success: true,
@@ -949,12 +950,13 @@ router.put('/payments/:id/reject', async (req, res) => {
         </div>
       `;
 
-      try {
-        await sendEmail(targetUser.email, 'Update on your ExpenseTracker Pro Payment', emailHtml);
-        await sendSms(targetUser.mobile, `ExpenseTracker Pro: Payment ${order.orderId} rejected. Reason: ${adminNotes}. Re-upload at prasatek.lk`);
-      } catch (mailErr) {
-        console.warn('Failed sending rejection email:', mailErr.message);
-      }
+      // Dispatch rejection notification in background (non-blocking)
+      Promise.all([
+        sendEmail(targetUser.email, 'Update on your ExpenseTracker Pro Payment', emailHtml),
+        sendSms(targetUser.mobile, `ExpenseTracker Pro: Payment ${order.orderId} rejected. Reason: ${adminNotes}. Re-upload at prasatek.lk`)
+      ]).catch((mailErr) => {
+        console.warn('Background rejection notification notice:', mailErr.message);
+      });
     }
 
     res.json({
