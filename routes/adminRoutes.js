@@ -258,6 +258,16 @@ router.post('/users', async (req, res) => {
 
     await logAuditAction(req, 'USER_CREATE', `Created new user profile (${newUser.email}) with role ${newUser.role}`, newUser.email, 'info');
 
+    // Dispatch Welcome Congratulations email
+    if (newUser.isVerified) {
+      try {
+        const { sendWelcomeEmail } = require('../utils/sendEmail');
+        await sendWelcomeEmail(newUser.email, newUser.name);
+      } catch (e) {
+        console.warn('Failed to send welcome email to new admin-created user:', e.message);
+      }
+    }
+
     res.status(201).json({
       _id: newUser._id,
       name: newUser.name,

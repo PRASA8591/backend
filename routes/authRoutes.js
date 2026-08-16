@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware');
-const sendVerificationCode = require('../utils/sendEmail');
+const { sendVerificationCode, sendWelcomeEmail } = require('../utils/sendEmail');
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -137,6 +137,13 @@ router.post('/verify', async (req, res) => {
       user.codeExpiresAt = undefined;
       user.verificationCodeExpires = undefined;
       await user.save();
+
+      // Dispatch matched-style congratulations / welcome registration email
+      try {
+        await sendWelcomeEmail(user.email, user.name);
+      } catch (welcomeErr) {
+        console.warn('[Welcome Email Warning] Failed sending congratulations email:', welcomeErr.message);
+      }
 
       const userObj = user.toObject();
       delete userObj.password;
