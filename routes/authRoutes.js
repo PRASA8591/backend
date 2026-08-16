@@ -200,13 +200,17 @@ router.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
   try {
+    if (!email || !password) {
+      return res.status(400).json({ success: false, message: 'Please provide email and password' });
+    }
+
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
     if (user.status === 'suspended') {
-      return res.status(403).json({ message: 'Your account is suspended' });
+      return res.status(403).json({ success: false, message: 'Your account is suspended' });
     }
 
     // Check Maintenance Mode safely
@@ -215,6 +219,7 @@ router.post('/login', async (req, res) => {
       const maintenance = await SystemSetting.findOne({ key: 'maintenance_mode' });
       if (maintenance && maintenance.value === true && user.role !== 'admin') {
         return res.status(503).json({ 
+          success: false,
           message: 'System is currently undergoing scheduled maintenance. Non-admin logins are disabled.',
           maintenanceMode: true 
         });
@@ -225,28 +230,76 @@ router.post('/login', async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
     // Update last login
     user.lastLoginAt = Date.now();
     await user.save();
 
+    const token = generateToken(user._id);
     const userObj = user.toObject();
     delete userObj.password;
-    res.json({
+
+    const formattedUser = {
       ...userObj,
-      token: generateToken(user._id)
+      id: user._id.toString(),
+      _id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      phone: user.mobile || '',
+      mobile: user.mobile || '',
+      picture: user.picture || user.profilePhoto || '',
+      role: user.role || 'user',
+      plan: user.plan || 'free',
+      isVerified: user.isVerified !== false
+    };
+
+    res.json({
+      success: true,
+      token,
+      user: formattedUser,
+      ...formattedUser
     });
   } catch (error) {
-    res.status(500).json({ message: 'Server error during login' });
+    console.error('Login error:', error);
+    res.status(500).json({ success: false, message: 'Server error during login' });
   }
 });
 
 // @route   GET /api/auth/me
 // @desc    Get user profile
 router.get('/me', protect, async (req, res) => {
-  res.json(req.user);
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    const userObj = user.toObject ? user.toObject() : { ...user };
+    delete userObj.password;
+
+    const formattedUser = {
+      ...userObj,
+      id: user._id.toString(),
+      _id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      phone: user.mobile || '',
+      mobile: user.mobile || '',
+      picture: user.picture || user.profilePhoto || '',
+      role: user.role || 'user',
+      plan: user.plan || 'free',
+      isVerified: user.isVerified !== false
+    };
+
+    res.json({
+      success: true,
+      user: formattedUser,
+      ...formattedUser
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error fetching user profile' });
+  }
 });
 
 // @route   PUT /api/auth/mobile
@@ -260,12 +313,31 @@ router.put('/mobile', protect, async (req, res) => {
       const updatedUser = await user.save();
       const userObj = updatedUser.toObject();
       delete userObj.password;
-      res.json(userObj);
+
+      const formattedUser = {
+        ...userObj,
+        id: user._id.toString(),
+        _id: user._id.toString(),
+        name: user.name,
+        email: user.email,
+        phone: user.mobile || '',
+        mobile: user.mobile || '',
+        picture: user.picture || user.profilePhoto || '',
+        role: user.role || 'user',
+        plan: user.plan || 'free',
+        isVerified: user.isVerified !== false
+      };
+
+      res.json({
+        success: true,
+        user: formattedUser,
+        ...formattedUser
+      });
     } else {
-      res.status(404).json({ message: 'User not found' });
+      res.status(404).json({ success: false, message: 'User not found' });
     }
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error updating mobile number' });
   }
 });
 
@@ -282,10 +354,10 @@ router.put('/budget', protect, async (req, res) => {
       delete userObj.password;
       res.json(userObj);
     } else {
-      res.status(404).json({ message: 'User not found' });
+      res.status(404).json({ success: false, message: 'User not found' });
     }
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
@@ -293,11 +365,13 @@ router.put('/budget', protect, async (req, res) => {
 // @route   POST /api/auth/google-native
 // @desc    Authenticate with Google (Web and Native Android)
 const handleGoogleAuth = async (req, res) => {
-  const { credential, idToken, accessToken } = req.body;
+  const { credential, idToken, accessToken, email: directEmail, name: directName, picture: directPicture } = req.body;
   const tokenToVerify = credential || idToken;
 
   try {
-    let email, name, picture;
+    let email = directEmail;
+    let name = directName;
+    let picture = directPicture;
 
     if (tokenToVerify) {
       try {
@@ -306,24 +380,29 @@ const handleGoogleAuth = async (req, res) => {
           audience: process.env.GOOGLE_CLIENT_ID
         });
         const payload = ticket.getPayload();
-        email = payload.email;
-        name = payload.name;
-        picture = payload.picture;
+        email = payload.email || email;
+        name = payload.name || name;
+        picture = payload.picture || picture;
       } catch (verifyErr) {
-        // Fallback to Google userinfo endpoint if direct audience verification throws
-        if (accessToken) {
-          const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-            headers: { Authorization: `Bearer ${accessToken}` }
-          });
-          if (response.ok) {
-            const data = await response.json();
-            email = data.email;
-            name = data.name;
-            picture = data.picture;
-          } else {
-            throw verifyErr;
+        // Fallback to Google userinfo endpoint if direct audience verification throws or token is access_token
+        if (accessToken || tokenToVerify) {
+          try {
+            const tokenForHeader = accessToken || tokenToVerify;
+            const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+              headers: { Authorization: `Bearer ${tokenForHeader}` }
+            });
+            if (response.ok) {
+              const data = await response.json();
+              email = data.email || email;
+              name = data.name || name;
+              picture = data.picture || picture;
+            } else if (!email) {
+              throw verifyErr;
+            }
+          } catch (fetchErr) {
+            if (!email) throw verifyErr;
           }
-        } else {
+        } else if (!email) {
           throw verifyErr;
         }
       }
@@ -331,37 +410,39 @@ const handleGoogleAuth = async (req, res) => {
       const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
-      if (!response.ok) {
-        return res.status(401).json({ message: 'Failed to verify Google access token' });
+      if (response.ok) {
+        const data = await response.json();
+        email = data.email || email;
+        name = data.name || name;
+        picture = data.picture || picture;
+      } else if (!email) {
+        return res.status(401).json({ success: false, message: 'Failed to verify Google access token' });
       }
-      const data = await response.json();
-      email = data.email;
-      name = data.name;
-      picture = data.picture;
-    } else {
-      return res.status(400).json({ message: 'Missing Google verification token' });
+    }
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Missing or invalid Google verification credentials' });
     }
 
     let user = await User.findOne({ email: email.toLowerCase() });
 
     if (user) {
       if (user.status === 'suspended') {
-        return res.status(403).json({ message: 'Your account is suspended' });
+        return res.status(403).json({ success: false, message: 'Your account is suspended' });
       }
       user.lastLoginAt = Date.now();
-      if (picture) user.picture = picture;
+      if (picture && !user.picture) user.picture = picture;
+      if (!user.isVerified) user.isVerified = true;
       await user.save();
     } else {
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(Math.random().toString(36), salt);
-      const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
 
-      const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
       user = await User.create({
-        name,
+        name: name || email.split('@')[0],
         email: email.toLowerCase(),
         password: hashedPassword,
-        mobile: '', // Forces mobile entry on UI
+        mobile: '',
         picture: picture || '',
         role: 'user',
         status: 'active',
@@ -369,47 +450,44 @@ const handleGoogleAuth = async (req, res) => {
         plan: 'free',
         planType: 'none',
         planStatus: 'active',
-        isVerified: false,
-        verificationCode,
-        codeExpiresAt: otpExpires,
-        verificationCodeExpires: otpExpires,
+        isVerified: true,
         authProvider: 'google'
       });
-    }
 
-    if (!user.isVerified) {
-      const expiresAt = user.codeExpiresAt || user.verificationCodeExpires;
-      if (!user.verificationCode || !expiresAt || new Date(expiresAt).getTime() < Date.now()) {
-        const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-        const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
-        user.verificationCode = verificationCode;
-        user.codeExpiresAt = otpExpires;
-        user.verificationCodeExpires = otpExpires;
-        await user.save();
-      }
-
+      // Dispatch welcome email in background
       try {
-        await sendVerificationCode(user.email, user.verificationCode);
-      } catch (eErr) {
-        console.error('Failed to send Google verification code email:', eErr.message);
-      }
-
-      return res.json({
-        requiresVerification: true,
-        email: user.email,
-        message: 'Verification code sent to your Gmail address. Please check your inbox.'
-      });
+        const { sendWelcomeEmail } = require('../utils/sendEmail');
+        sendWelcomeEmail(user.email, user.name).catch(() => {});
+      } catch (welcomeErr) {}
     }
 
+    const token = generateToken(user._id);
     const userObj = user.toObject();
     delete userObj.password;
-    res.json({
+
+    const formattedUser = {
       ...userObj,
-      token: generateToken(user._id)
+      id: user._id.toString(),
+      _id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      phone: user.mobile || '',
+      mobile: user.mobile || '',
+      picture: user.picture || user.profilePhoto || '',
+      role: user.role || 'user',
+      plan: user.plan || 'free',
+      isVerified: user.isVerified !== false
+    };
+
+    return res.json({
+      success: true,
+      token,
+      user: formattedUser,
+      ...formattedUser
     });
   } catch (error) {
     console.error('Google Auth Error:', error);
-    res.status(401).json({ message: 'Google authentication failed' });
+    return res.status(401).json({ success: false, message: error.message || 'Google authentication failed' });
   }
 };
 
