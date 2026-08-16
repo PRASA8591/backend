@@ -3,13 +3,10 @@ const axios = require('axios');
 // Helper function to pause execution (Carrier Rate-Limit Protection)
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Contact info footer
-const FOOTER_TEXT = "\n\n(No-reply. This is an automated message. Contact: www.prasatek.lk / Email: Info@prasatek.lk / Mobile: 0719323239)";
-
 /**
  * Send an SMS message via official sms-gate.app Cloud API (v1)
  * @param {string} phoneNumber - Recipient phone number (e.g., +94773318853 or 0773318853)
- * @param {string} message - Text message content
+ * @param {string} message - Text message content (keep under 160 chars)
  */
 const sendSms = async (phoneNumber, message) => {
   try {
@@ -30,13 +27,10 @@ const sendSms = async (phoneNumber, message) => {
       formattedPhone = '+' + formattedPhone;
     }
 
-    // Append automated note & contact details to every SMS
-    const fullMessage = message.trim() + FOOTER_TEXT;
-
     // Payload expected by official sms-gate Cloud REST API
     const payload = {
       phoneNumbers: [formattedPhone],
-      message: fullMessage
+      message: message
     };
 
     const authHeader = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
