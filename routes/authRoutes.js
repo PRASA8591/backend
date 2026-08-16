@@ -365,13 +365,23 @@ router.put('/budget', protect, async (req, res) => {
 // @route   POST /api/auth/google-native
 // @desc    Authenticate with Google (Web and Native Android)
 const handleGoogleAuth = async (req, res) => {
-  const { credential, idToken, accessToken, email: directEmail, name: directName, picture: directPicture } = req.body;
-  const tokenToVerify = credential || idToken;
-
   try {
-    let email = directEmail;
-    let name = directName;
-    let picture = directPicture;
+    const {
+      credential,
+      idToken,
+      token: rawToken,
+      accessToken,
+      email: directEmail,
+      name: directName,
+      picture: directPicture,
+      imageUrl: directImageUrl,
+      avatar: directAvatar
+    } = req.body || {};
+
+    const tokenToVerify = credential || idToken || rawToken;
+    let picture = directPicture || directImageUrl || directAvatar || '';
+    let name = directName || '';
+    let email = directEmail ? String(directEmail).toLowerCase().trim() : '';
 
     if (tokenToVerify) {
       try {
@@ -380,9 +390,11 @@ const handleGoogleAuth = async (req, res) => {
           audience: process.env.GOOGLE_CLIENT_ID
         });
         const payload = ticket.getPayload();
-        email = payload.email || email;
-        name = payload.name || name;
-        picture = payload.picture || picture;
+        if (payload) {
+          email = (payload.email || email).toLowerCase().trim();
+          name = payload.name || name;
+          picture = payload.picture || picture;
+        }
       } catch (verifyErr) {
         // Fallback to Google userinfo endpoint if direct audience verification throws or token is access_token
         if (accessToken || tokenToVerify) {
@@ -393,7 +405,7 @@ const handleGoogleAuth = async (req, res) => {
             });
             if (response.ok) {
               const data = await response.json();
-              email = data.email || email;
+              email = (data.email || email).toLowerCase().trim();
               name = data.name || name;
               picture = data.picture || picture;
             } else if (!email) {
@@ -407,24 +419,33 @@ const handleGoogleAuth = async (req, res) => {
         }
       }
     } else if (accessToken) {
-      const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        email = data.email || email;
-        name = data.name || name;
-        picture = data.picture || picture;
-      } else if (!email) {
-        return res.status(401).json({ success: false, message: 'Failed to verify Google access token' });
+      try {
+        const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          email = (data.email || email).toLowerCase().trim();
+          name = data.name || name;
+          picture = data.picture || picture;
+        } else if (!email) {
+          return res.status(400).json({ success: false, message: 'Failed to verify Google access token' });
+        }
+      } catch (tokenErr) {
+        if (!email) {
+          return res.status(400).json({ success: false, message: 'Failed to fetch Google user profile' });
+        }
       }
     }
 
     if (!email) {
-      return res.status(400).json({ success: false, message: 'Missing or invalid Google verification credentials' });
+      return res.status(400).json({
+        success: false,
+        message: 'Missing or invalid Google verification credentials (no valid email found)'
+      });
     }
 
-    let user = await User.findOne({ email: email.toLowerCase() });
+    let user = await User.findOne({ email: email });
 
     if (user) {
       if (user.status === 'suspended') {
@@ -432,6 +453,7 @@ const handleGoogleAuth = async (req, res) => {
       }
       user.lastLoginAt = Date.now();
       if (picture && !user.picture) user.picture = picture;
+      if (name && (!user.name || user.name === email.split('@')[0])) user.name = name;
       if (!user.isVerified) user.isVerified = true;
       await user.save();
     } else {
@@ -440,7 +462,7 @@ const handleGoogleAuth = async (req, res) => {
 
       user = await User.create({
         name: name || email.split('@')[0],
-        email: email.toLowerCase(),
+        email: email,
         password: hashedPassword,
         mobile: '',
         picture: picture || '',
@@ -456,8 +478,9 @@ const handleGoogleAuth = async (req, res) => {
 
       // Dispatch welcome email in background
       try {
-        const { sendWelcomeEmail } = require('../utils/sendEmail');
-        sendWelcomeEmail(user.email, user.name).catch(() => {});
+        if (typeof sendWelcomeEmail === 'function') {
+          sendWelcomeEmail(user.email, user.name).catch(() => {});
+        }
       } catch (welcomeErr) {}
     }
 
@@ -465,15 +488,17 @@ const handleGoogleAuth = async (req, res) => {
     const userObj = user.toObject();
     delete userObj.password;
 
+    const phone = user.mobile || user.phone || '';
     const formattedUser = {
       ...userObj,
-      id: user._id.toString(),
       _id: user._id.toString(),
+      id: user._id.toString(),
       name: user.name,
       email: user.email,
-      phone: user.mobile || '',
-      mobile: user.mobile || '',
+      phone: phone,
+      mobile: phone,
       picture: user.picture || user.profilePhoto || '',
+      avatar: user.picture || user.profilePhoto || '',
       role: user.role || 'user',
       plan: user.plan || 'free',
       isVerified: user.isVerified !== false
@@ -487,7 +512,10 @@ const handleGoogleAuth = async (req, res) => {
     });
   } catch (error) {
     console.error('Google Auth Error:', error);
-    return res.status(401).json({ success: false, message: error.message || 'Google authentication failed' });
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Google authentication failed'
+    });
   }
 };
 
