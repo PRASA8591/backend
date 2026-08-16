@@ -27,16 +27,10 @@ const sendSms = async (phoneNumber, message) => {
       formattedPhone = '+' + formattedPhone;
     }
 
-    // Ensure (Do Not Reply) notice is on all outgoing SMS messages
-    let cleanMessage = message ? String(message).trim() : '';
-    if (!cleanMessage.toLowerCase().includes('do not reply') && !cleanMessage.toLowerCase().includes('dont reply')) {
-      cleanMessage += ' (Do Not Reply)';
-    }
-
     // Payload expected by official sms-gate Cloud REST API
     const payload = {
       phoneNumbers: [formattedPhone],
-      message: cleanMessage
+      message: message
     };
 
     const authHeader = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
