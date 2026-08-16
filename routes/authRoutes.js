@@ -526,9 +526,8 @@ router.post('/google-native', handleGoogleAuth);
 // @route   GET /api/auth/google
 // @desc    Initiate Google OAuth login via Browser
 router.get(['/google/app-login', '/google'], (req, res) => {
-  const host = req.get('host') || 'backend-xolk.onrender.com';
-  const protocol = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-  const redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+  // Explicitly use configured callback URL or standard production backend callback URL
+  const redirectUri = process.env.GOOGLE_CALLBACK_URL || 'https://backend-xolk.onrender.com/api/auth/google/callback';
   const clientId = process.env.GOOGLE_CLIENT_ID || '40902555112-7p9ga25odid8onlj8ehtbmn3jclqfos5.apps.googleusercontent.com';
   
   const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=openid%20profile%20email&access_type=offline&prompt=select_account`;
@@ -552,9 +551,7 @@ router.get('/google/callback', async (req, res) => {
   }
 
   try {
-    const host = req.get('host') || 'backend-xolk.onrender.com';
-    const protocol = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-    const redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+    const redirectUri = process.env.GOOGLE_CALLBACK_URL || 'https://backend-xolk.onrender.com/api/auth/google/callback';
     const clientId = process.env.GOOGLE_CLIENT_ID || '40902555112-7p9ga25odid8onlj8ehtbmn3jclqfos5.apps.googleusercontent.com';
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
 
