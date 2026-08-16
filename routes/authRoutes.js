@@ -522,6 +522,176 @@ const handleGoogleAuth = async (req, res) => {
 router.post('/google', handleGoogleAuth);
 router.post('/google-native', handleGoogleAuth);
 
+// @route   GET /api/auth/google/app-login
+// @route   GET /api/auth/google
+// @desc    Initiate Google OAuth login via Browser
+router.get(['/google/app-login', '/google'], (req, res) => {
+  const host = req.get('host') || 'backend-xolk.onrender.com';
+  const protocol = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+  const redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+  const clientId = process.env.GOOGLE_CLIENT_ID || '40902555112-7p9ga25odid8onlj8ehtbmn3jclqfos5.apps.googleusercontent.com';
+  
+  const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=openid%20profile%20email&access_type=offline&prompt=select_account`;
+  return res.redirect(googleAuthUrl);
+});
+
+// @route   GET /api/auth/google/callback
+// @desc    Handle Google OAuth callback and redirect to app
+router.get('/google/callback', async (req, res) => {
+  const { code, error } = req.query;
+  if (error || !code) {
+    return res.status(400).send(`
+      <html>
+        <body style="font-family: sans-serif; text-align: center; padding: 40px; background:#0f172a; color:#fff;">
+          <h2>Authentication Cancelled</h2>
+          <p>${error || 'No authorization code received'}</p>
+          <a href="expensetracker://auth-callback?error=cancelled" style="display:inline-block; margin-top:20px; padding:10px 20px; background:#10b981; color:#fff; text-decoration:none; border-radius:8px;">Return to App</a>
+        </body>
+      </html>
+    `);
+  }
+
+  try {
+    const host = req.get('host') || 'backend-xolk.onrender.com';
+    const protocol = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+    const clientId = process.env.GOOGLE_CLIENT_ID || '40902555112-7p9ga25odid8onlj8ehtbmn3jclqfos5.apps.googleusercontent.com';
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
+
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code: String(code),
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code'
+      })
+    });
+
+    const tokenData = await tokenRes.json();
+    let email = '';
+    let name = '';
+    let picture = '';
+
+    if (tokenData.access_token) {
+      const userRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` }
+      });
+      if (userRes.ok) {
+        const userInfo = await userRes.json();
+        email = (userInfo.email || '').toLowerCase().trim();
+        name = userInfo.name || '';
+        picture = userInfo.picture || '';
+      }
+    }
+
+    if (!email && tokenData.id_token) {
+      try {
+        const ticket = await client.verifyIdToken({
+          idToken: tokenData.id_token,
+          audience: clientId
+        });
+        const payload = ticket.getPayload();
+        if (payload) {
+          email = (payload.email || '').toLowerCase().trim();
+          name = payload.name || name;
+          picture = payload.picture || picture;
+        }
+      } catch (idErr) {}
+    }
+
+    if (!email) {
+      return res.status(400).send('<h3>Unable to retrieve email from Google Account</h3>');
+    }
+
+    let user = await User.findOne({ email });
+    if (user) {
+      user.lastLoginAt = Date.now();
+      if (picture && !user.picture) user.picture = picture;
+      if (!user.isVerified) user.isVerified = true;
+      await user.save();
+    } else {
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(Math.random().toString(36), salt);
+      user = await User.create({
+        name: name || email.split('@')[0],
+        email: email,
+        password: hashedPassword,
+        mobile: '',
+        picture: picture || '',
+        role: 'user',
+        status: 'active',
+        org: 'default',
+        plan: 'free',
+        planType: 'none',
+        planStatus: 'active',
+        isVerified: true,
+        authProvider: 'google'
+      });
+    }
+
+    const token = generateToken(user._id);
+    const userObj = user.toObject();
+    delete userObj.password;
+    const phone = user.mobile || user.phone || '';
+    const formattedUser = {
+      ...userObj,
+      _id: user._id.toString(),
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      phone: phone,
+      mobile: phone,
+      picture: user.picture || user.profilePhoto || '',
+      avatar: user.picture || user.profilePhoto || '',
+      role: user.role || 'user',
+      plan: user.plan || 'free',
+      isVerified: user.isVerified !== false
+    };
+
+    const userParam = encodeURIComponent(JSON.stringify(formattedUser));
+    const deepLinkUrl = `expensetracker://auth-callback?token=${token}&user=${userParam}`;
+    const webFallbackUrl = `https://cash.prasatek.lk/?token=${token}&user=${userParam}`;
+
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Authenticating...</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #0f172a; color: #fff; text-align: center; }
+            .card { background: #1e293b; padding: 32px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); max-width: 380px; width: 90%; }
+            .spinner { border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid #10b981; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 16px; }
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+            a.btn { display: inline-block; margin-top: 16px; padding: 12px 24px; background: #10b981; color: #fff; font-weight: bold; text-decoration: none; border-radius: 10px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="spinner"></div>
+            <h3 style="margin-bottom: 8px;">Authentication Successful</h3>
+            <p style="color: #94a3b8; font-size: 13px; margin-bottom: 16px;">Redirecting you back to ExpenseTracker Pro...</p>
+            <a id="deepLinkBtn" href="${deepLinkUrl}" class="btn">Open App</a>
+          </div>
+          <script>
+            window.location.href = "${deepLinkUrl}";
+            setTimeout(function() {
+              window.location.href = "${webFallbackUrl}";
+            }, 2500);
+          </script>
+        </body>
+      </html>
+    `);
+  } catch (err) {
+    console.error('OAuth Callback Error:', err);
+    return res.status(500).send('<h3>Authentication Error: ' + (err.message || 'Unknown') + '</h3>');
+  }
+});
+
 // @route   PUT /api/auth/profile
 // @desc    Update profile info (name, photo)
 router.put('/profile', protect, async (req, res) => {
