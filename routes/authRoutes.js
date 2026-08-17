@@ -213,29 +213,28 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ success: false, message: 'Your account is suspended' });
     }
 
-    // Check Maintenance Mode safely
-    try {
-      const SystemSetting = require('../models/SystemSetting');
-      const maintenance = await SystemSetting.findOne({ key: 'maintenance_mode' });
-      if (maintenance && maintenance.value === true && user.role !== 'admin') {
-        return res.status(503).json({ 
-          success: false,
-          message: 'System is currently undergoing scheduled maintenance. Non-admin logins are disabled.',
-          maintenanceMode: true 
-        });
-      }
-    } catch (settingErr) {
-      console.error('Safe maintenance check error in login:', settingErr.message);
+    const SystemSetting = require('../models/SystemSetting');
+
+    // Run password verification & maintenance check in parallel to reduce login latency
+    const [isMatch, maintenance] = await Promise.all([
+      bcrypt.compare(password, user.password),
+      SystemSetting.findOne({ key: 'maintenance_mode' }).catch(() => null)
+    ]);
+
+    if (maintenance && maintenance.value === true && user.role !== 'admin') {
+      return res.status(503).json({ 
+        success: false,
+        message: 'System is currently undergoing scheduled maintenance. Non-admin logins are disabled.',
+        maintenanceMode: true 
+      });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
-    // Update last login
-    user.lastLoginAt = Date.now();
-    await user.save();
+    // Update last login timestamp asynchronously in background (non-blocking for instant login speed)
+    User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } }).exec().catch(err => console.error('Last login timestamp update error:', err.message));
 
     const token = generateToken(user._id);
     const userObj = user.toObject();

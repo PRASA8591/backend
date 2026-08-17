@@ -186,9 +186,10 @@ router.post('/upload-proof', protect, upload.single('receipt'), async (req, res)
     });
 
     // 1. User Confirmation SMS (Short & Clean)
-    if (req.user.phone) {
+    const userPhone = req.user.mobile || req.user.phone;
+    if (userPhone) {
       const userMsg = `Hello ${req.user.name}, your payment proof for ${orderId} has been received. Thank you!`;
-      await sendSms(req.user.phone, userMsg);
+      await sendSms(userPhone, userMsg);
     }
 
     // 2. Admin Alert SMS (Shortened under 160 chars to prevent Dialog Error 72)

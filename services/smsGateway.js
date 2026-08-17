@@ -10,7 +10,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 const sendSms = async (phoneNumber, message) => {
   try {
-    const targetUrl = process.env.SMS_GATEWAY_URL || 'https://api.sms-gate.app/v1/message';
+    const targetUrl = process.env.SMS_GATEWAY_URL || 'https://api.sms-gate.app/3rdparty/v1/messages';
     const user = process.env.SMS_GATEWAY_USER || '0AWTPN';
     const pass = process.env.SMS_GATEWAY_PASS || 'afsslxw2odrobo';
 
@@ -29,8 +29,10 @@ const sendSms = async (phoneNumber, message) => {
 
     // Payload expected by official sms-gate Cloud REST API
     const payload = {
-      phoneNumbers: [formattedPhone],
-      message: message
+      textMessage: {
+        text: message
+      },
+      phoneNumbers: [formattedPhone]
     };
 
     const authHeader = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
@@ -45,7 +47,7 @@ const sendSms = async (phoneNumber, message) => {
       timeout: 10000
     });
 
-    if (response.status === 200 || response.status === 202) {
+    if (response.status === 200 || response.status === 201 || response.status === 202) {
       console.log(`[SMS Gateway] ✅ SMS successfully queued for ${formattedPhone}. Status: ${response.status}`);
       return { success: true, data: response.data };
     } else {
